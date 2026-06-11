@@ -9,6 +9,69 @@ namespace LIMS_AJT_NK_API.Controllers;
 [Route("api")]
 public class CallbackController(ApplicationDbContext dbContext) : ControllerBase
 {
+    [HttpGet("test")]
+    public IActionResult TestApi()
+    {
+        return Ok(new
+        {
+            status = "success",
+            message = "API is reachable",
+            data = new
+            {
+                server_time = DateTime.Now
+            },
+            errors = (object?)null
+        });
+    }
+
+    [HttpGet("health")]
+    public async Task<IActionResult> HealthCheck(CancellationToken cancellationToken)
+    {
+        var isDbHealthy = false;
+        string? dbError = null;
+        try
+        {
+            isDbHealthy = await dbContext.Database.CanConnectAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            dbError = ex.Message;
+        }
+
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var uptime = DateTime.UtcNow - process.StartTime.ToUniversalTime();
+
+        var assembly = typeof(Program).Assembly;
+        var version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(assembly)?.InformationalVersion 
+                      ?? assembly.GetName().Version?.ToString() 
+                      ?? "1.0.0";
+
+        var isHealthy = isDbHealthy;
+
+        var response = new
+        {
+            status = isHealthy ? "healthy" : "unhealthy",
+            message = isHealthy ? "Service is running and database is connected" : "Service is degraded",
+            data = new
+            {
+                version,
+                uptime = $"{(int)uptime.TotalDays}d {uptime.Hours:D2}h {uptime.Minutes:D2}m {uptime.Seconds:D2}s",
+                uptime_seconds = uptime.TotalSeconds,
+                db_status = isDbHealthy ? "connected" : "disconnected",
+                db_error = dbError,
+                server_time_utc = DateTime.UtcNow
+            },
+            errors = isHealthy ? null : new[] { new { field = "database", message = dbError ?? "Unable to connect to database" } }
+        };
+
+        if (!isHealthy)
+        {
+            return StatusCode(503, response);
+        }
+
+        return Ok(response);
+    }
+
     [HttpPost("call_back")]
     public async Task<IActionResult> ReceiveOcrResult([FromBody] OcrCallbackRequest request, CancellationToken cancellationToken)
     {

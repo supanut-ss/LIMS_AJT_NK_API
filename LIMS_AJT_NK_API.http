@@ -1,6 +1,46 @@
 @LIMS_AJT_NK_API_HostAddress = http://localhost:5117
 
-GET {{LIMS_AJT_NK_API_HostAddress}}/weatherforecast/
+GET {{LIMS_AJT_NK_API_HostAddress}}/api/test
 Accept: application/json
+
+###
+
+GET {{LIMS_AJT_NK_API_HostAddress}}/api/health
+Accept: application/json
+
+###
+
+POST {{LIMS_AJT_NK_API_HostAddress}}/api/call_back
+Content-Type: application/json
+
+{
+	"job_task_id": "JOB-TEST-001",
+	"ocr_result": [
+		{
+			"page_id": 1,
+			"tracking_id": "TRACK-001",
+			"tracking_status": "SUCCESS",
+			"body_json": {
+				"product_name": "Sample Product",
+				"document_type": "COA",
+				"supplier_name": "Sample Supplier",
+				"lot_number": "LOT-001",
+				"origin_supplier_name": "Origin Supplier",
+				"origin_product_name": "Origin Product",
+				"expiry_date": "31/12/2026",
+				"mfg_date": "01/01/2026",
+				"internal_lot": "INT-001",
+				"quantity": "10.50",
+				"body_item": [
+					{
+						"parameter_name": "Moisture",
+						"result": "5.20",
+						"uom": "%"
+					}
+				]
+			}
+		}
+	]
+}
 
 ###
