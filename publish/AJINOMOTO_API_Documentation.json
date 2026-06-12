@@ -1,0 +1,352 @@
+{
+	"info": {
+		"_postman_id": "9459a554-9ecf-496b-825b-030fc65c0423",
+		"name": "AJINOMOTO",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "17144960"
+	},
+	"item": [
+		{
+			"name": "input_ocr",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"flow_id\": \"69e5a35737ce961ba7f49c65\",\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"s3_path_image\": \"folder/image/test_img.pdf\",\n    \"callback_url\": \"https://myserver.com/api/callback/upload\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{host}}/input_ocr",
+					"host": [
+						"{{host}}"
+					],
+					"path": [
+						"input_ocr"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "success",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"flow_id\": \"69e5a35737ce961ba7f49c65\",\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"s3_path_image\": \"folder/image/test_img.pdf\",\n    \"callback_url\": \"https://myserver.com/api/callback/upload\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{host}}/input",
+							"host": [
+								"{{host}}"
+							],
+							"path": [
+								"input"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json",
+							"name": "Content-Type",
+							"description": "",
+							"type": "text"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"success\",\n    \"message\": \"ส่งข้อมูลสำเร็จ\",\n    \"data\": {},\n    \"errors\": null\n}"
+				},
+				{
+					"name": "error",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"flow_id\": \"69e5a35737ce961ba7f49c65\",\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"s3_path_image\": \"folder/image/test_img.jpg\",\n    \"callback_url\": \"https://myserver.com/api/callback/upload\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{host}}/input",
+							"host": [
+								"{{host}}"
+							],
+							"path": [
+								"input"
+							]
+						}
+					},
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json",
+							"name": "Content-Type",
+							"description": "",
+							"type": "text"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"error\",\n    \"message\": \"ข้อมูลไม่ถูกต้อง\",\n    \"data\": {},\n    \"errors\": [\n        {\n            \"field\": \"s3_path_image\",\n            \"message\": \"ชนิดไฟล์ภาพไม่ถูกต้อง\"\n        }\n    ]\n}"
+				},
+				{
+					"name": "error",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"flow_id\": \"\",\n    \"job_task_id\": \"\",\n    \"s3_path_image\": [\"folder/image/test_img.pdf\"],\n    \"callback_url\": \"\"\n} ",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{host}}/input",
+							"host": [
+								"{{host}}"
+							],
+							"path": [
+								"input"
+							]
+						}
+					},
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json",
+							"name": "Content-Type",
+							"description": "",
+							"type": "text"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"error\",\n    \"message\": \"ข้อมูลไม่ถูกต้อง\",\n    \"data\": {},\n    \"errors\": [\n        {\n            \"field\": \"flow_id\",\n            \"message\": \"ห้ามเว้นว่าง\"\n        },\n        {\n            \"field\": \"job_task_id\",\n            \"message\": \"ห้ามเว้นว่าง\"\n        },\n        {\n            \"field\": \"ocr\",\n            \"message\": \"รูปแบบ ocr ไม่ถูกต้อง\"\n        },\n        {\n            \"field\": \"callback_url\",\n            \"message\": \"ห้ามเว้นว่าง\"\n        }\n    ]\n}"
+				},
+				{
+					"name": "error",
+					"originalRequest": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"flow_id\": \"69e5a35737ce961ba7f49c65\",\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"s3_path_image\": \"folder/image/test_img.pdf\",\n    \"callback_url\": \"https://myserver.com/api/callback/upload\"\n} ",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{host}}/input",
+							"host": [
+								"{{host}}"
+							],
+							"path": [
+								"input"
+							]
+						}
+					},
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json",
+							"name": "Content-Type",
+							"description": "",
+							"type": "text"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"error\",\n    \"message\": \"เกิดข้อผิดพลาดภายในระบบ กรุณาลองใหม่อีกครั้ง\",\n    \"data\": {},\n    \"errors\": null\n}"
+				}
+			]
+		},
+		{
+			"name": "get_result_ocr",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n   \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\"\n}\n",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{host}}/get_result_ocr",
+					"host": [
+						"{{host}}"
+					],
+					"path": [
+						"get_result_ocr"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "get_result_ocr",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n   \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\"\n}\n",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{host}}/get_result_ocr",
+							"host": [
+								"{{host}}"
+							],
+							"path": [
+								"get_result_ocr"
+							]
+						}
+					},
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json",
+							"name": "Content-Type",
+							"description": "",
+							"type": "text"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"ocr_result\": [\n        {\n            \"page_id\": 1,\n            \"tracking_id\": \"test_call_coa_1\",\n            \"tracking_status\": \"processing\",\n            \"body_json\": {}\n        },\n        {\n            \"page_id\": 2,\n            \"tracking_id\": \"test_call_coa_2\",\n            \"tracking_status\": \"fail\",\n            \"body_json\": {}\n        },\n        {\n            \"page_id\": 3,\n            \"tracking_id\": \"test_call_coa_3\",\n            \"tracking_status\": \"ReadyToCheck\",\n            \"body_json\": {\n                \"product_name\": \"CC-5000-WS-P 5KG\",\n                \"document_type\": \"Certificate of analysis\",\n                \"Supplier_name\": \"37\",\n                \"lot_number\": \"301289\",\n                \"origin_supplier_name\": \"Brenntag Ingredients (Thailand)\",\n                \"origin_product_name\": \"CC-5000-WS-P 5KG\",\n                \"expiry_date\": \"07/12/2026\",\n                \"mfg_date\": \"07/12/2024\",\n                \"Internal_lot\": \"2537110301\",\n                \"quantity\": null,\n                \"body_item\": [\n                    {\n                        \"parameter_name\": \"Carminic Acid\",\n                        \"result\": \"49.2\",\n                        \"uom\": \"%\"\n                    },\n                    {\n                        \"parameter_name\": \"pH\",\n                        \"result\": \"10.8\",\n                        \"uom\": null\n                    },\n                    {\n                        \"parameter_name\": \"Moisture Content\",\n                        \"result\": \"6\",\n                        \"uom\": \"%\"\n                    },\n                    {\n                        \"parameter_name\": \"Aerobic Viable Count, 30°C\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Yeasts and Molds\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Enterobacteriaceae\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Aerobic mesophilic spores\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Sulphite red. bacteria,spores\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Salmonella\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 25g\"\n                    },\n                    {\n                        \"parameter_name\": \"Listeria\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 25g\"\n                    },\n                    {\n                        \"parameter_name\": \"E. coli\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 1g\"\n                    },\n                    {\n                        \"parameter_name\": \"S. aureus\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 1g\"\n                    },\n                    {\n                        \"parameter_name\": \"Arsenic\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Cadmium\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Lead\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Mercury\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    }\n                ]\n            }\n        }\n    ]\n}"
+				}
+			]
+		},
+		{
+			"name": "feedback",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"ocr_result\": [\n        {\n            \"page_id\": 3,\n            \"body_json\": {\n                \"product_name\": \"CC-5000-WS-P 5KG\",\n                \"document_type\": \"Certificate of analysis\",\n                \"Supplier_name\": \"37\",\n                \"lot_number\": \"301289\",\n                \"origin_supplier_name\": \"Brenntag Ingredients (Thailand)\",\n                \"origin_product_name\": \"CC-5000-WS-P 5KG\",\n                \"expiry_date\": \"07/12/2026\",\n                \"mfg_date\": \"07/12/2024\",\n                \"Internal_lot\": \"2537110301\",\n                \"quantity\": null,\n                \"body_item\": [\n                    {\n                        \"parameter_name\": \"Carminic Acid\",\n                        \"result\": \"49.2\",\n                        \"uom\": \"%\"\n                    },\n                    {\n                        \"parameter_name\": \"pH\",\n                        \"result\": \"10.8\",\n                        \"uom\": null\n                    },\n                    {\n                        \"parameter_name\": \"Moisture Content\",\n                        \"result\": \"6\",\n                        \"uom\": \"%\"\n                    },\n                    {\n                        \"parameter_name\": \"Aerobic Viable Count, 30°C\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Yeasts and Molds\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Enterobacteriaceae\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Aerobic mesophilic spores\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Sulphite red. bacteria,spores\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Salmonella\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 25g\"\n                    },\n                    {\n                        \"parameter_name\": \"Listeria\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 25g\"\n                    },\n                    {\n                        \"parameter_name\": \"E. coli\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 1g\"\n                    },\n                    {\n                        \"parameter_name\": \"S. aureus\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 1g\"\n                    },\n                    {\n                        \"parameter_name\": \"Arsenic\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Cadmium\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Lead\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Mercury\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    }\n                ]\n            }\n        }\n    ]\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{host}}/feedback",
+					"host": [
+						"{{host}}"
+					],
+					"path": [
+						"feedback"
+					]
+				}
+			},
+			"response": [
+				{
+					"name": "success",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"ocr_result\": [\n        {\n            \"page_id\": 3,\n            \"body_json\": {\n                \"product_name\": \"CC-5000-WS-P 5KG\",\n                \"document_type\": \"Certificate of analysis\",\n                \"Supplier_name\": \"37\",\n                \"lot_number\": \"301289\",\n                \"origin_supplier_name\": \"Brenntag Ingredients (Thailand)\",\n                \"origin_product_name\": \"CC-5000-WS-P 5KG\",\n                \"expiry_date\": \"07/12/2026\",\n                \"mfg_date\": \"07/12/2024\",\n                \"Internal_lot\": \"2537110301\",\n                \"quantity\": null,\n                \"body_item\": [\n                    {\n                        \"parameter_name\": \"Carminic Acid\",\n                        \"result\": \"49.2\",\n                        \"uom\": \"%\"\n                    },\n                    {\n                        \"parameter_name\": \"pH\",\n                        \"result\": \"10.8\",\n                        \"uom\": null\n                    },\n                    {\n                        \"parameter_name\": \"Moisture Content\",\n                        \"result\": \"6\",\n                        \"uom\": \"%\"\n                    },\n                    {\n                        \"parameter_name\": \"Aerobic Viable Count, 30°C\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Yeasts and Molds\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Enterobacteriaceae\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Aerobic mesophilic spores\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Sulphite red. bacteria,spores\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"cfu/g\"\n                    },\n                    {\n                        \"parameter_name\": \"Salmonella\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 25g\"\n                    },\n                    {\n                        \"parameter_name\": \"Listeria\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 25g\"\n                    },\n                    {\n                        \"parameter_name\": \"E. coli\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 1g\"\n                    },\n                    {\n                        \"parameter_name\": \"S. aureus\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"Absent in 1g\"\n                    },\n                    {\n                        \"parameter_name\": \"Arsenic\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Cadmium\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Lead\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    },\n                    {\n                        \"parameter_name\": \"Mercury\",\n                        \"result\": \"Conforms\",\n                        \"uom\": \"ppm\"\n                    }\n                ]\n            }\n        }\n    ]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{host}}/feedback",
+							"host": [
+								"{{host}}"
+							],
+							"path": [
+								"feedback"
+							]
+						}
+					},
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json",
+							"name": "Content-Type",
+							"description": "",
+							"type": "text"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"success\",\n    \"message\": \"ส่งข้อมูลสำเร็จ\",\n    \"data\": {},\n    \"errors\": null\n}"
+				},
+				{
+					"name": "error",
+					"originalRequest": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"job_task_id\": \"bbad9149-5ff2-45fc-855b-a12a5fc8f810\",\n    \"ocr_result\": [\n        {\n            \"page_id\": 3,\n            \"body_json\": {\n                \"product_name_test_wrong\": \"CC-5000-WS-P 5KG\",\n                \"document_type\": \"Certificate of analysis\",\n                \"Supplier_name\": \"37\",\n                \"lot_number\": \"301289\",\n                \"origin_supplier_name\": \"Brenntag Ingredients (Thailand)\",\n                \"origin_product_name\": \"CC-5000-WS-P 5KG\",\n                \"expiry_date\": \"07/12/2026\",\n                \"mfg_date\": \"07/12/2024\",\n                \"Internal_lot\": \"2537110301\",\n                \"quantity\": null,\n                \"body_item\": [\n                    {\n                        \"parameter_name\": \"Carminic Acid\",\n                        \"result\": \"49.2\",\n                        \"uom\": \"%\"\n                    }\n                ]\n            }\n        }\n    ]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{host}}/feedback",
+							"host": [
+								"{{host}}"
+							],
+							"path": [
+								"feedback"
+							]
+						}
+					},
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json",
+							"name": "Content-Type",
+							"description": "",
+							"type": "text"
+						}
+					],
+					"cookie": [],
+					"body": "{\n    \"status\": \"error\",\n    \"message\": \"ข้อมูลไม่ถูกต้อง\",\n    \"data\": {},\n    \"errors\": [\n        {\n            \"field\": \"product_name\",\n            \"message\": \"ไม่พบ field นี้\"\n        },\n        {\n            \"field\": \"body_item\",\n            \"message\": \"จำนวน item ไม่ตรบ\"\n        }\n    ]\n}"
+				}
+			]
+		}
+	]
+}

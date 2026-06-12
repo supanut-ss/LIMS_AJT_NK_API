@@ -1,0 +1,209 @@
+# LIMS AJT NK API — เอกสารสรุป API ภายในระบบ
+
+เอกสารฉบับนี้สรุปวิธีการเรียกใช้และโครงสร้างข้อมูลของ API ทั้ง 3 เส้นที่ถูกพัฒนาขึ้นภายในระบบ **LIMS_AJT_NK_API** (ฝั่งเรา)
+
+**Base URL:** `http://<your-host>:<port>` (เช่น Development: `http://localhost:5117`)
+
+---
+
+## 1. GET `/api/test`
+ใช้สำหรับตรวจสอบการเชื่อมต่อกับระบบ API (Connectivity Test / Ping)
+
+### Request
+* **Method:** `GET`
+* **Path:** `/api/test`
+* **Headers:** `Accept: application/json`
+
+### Response
+#### ✅ Success — `200 OK`
+```json
+{
+    "status": "success",
+    "message": "API is reachable",
+    "data": {
+        "server_time": "2026-06-12T09:30:20.1234567+07:00"
+    },
+    "errors": null
+}
+```
+
+---
+
+## 2. GET `/api/health`
+ใช้สำหรับทำ Health Check ของระบบ ตรวจสอบการเชื่อมต่อของฐานข้อมูล (Database Connection) และดูค่า Uptime/Version
+
+### Request
+* **Method:** `GET`
+* **Path:** `/api/health`
+* **Headers:** `Accept: application/json`
+
+### Response
+#### ✅ Healthy — `200 OK`
+เกิดขึ้นเมื่อระบบทำงานปกติและสามารถเชื่อมต่อฐานข้อมูลได้สำเร็จ
+```json
+{
+    "status": "healthy",
+    "message": "Service is running and database is connected",
+    "data": {
+        "version": "1.0.0",
+        "uptime": "0d 01h 23m 45s",
+        "uptime_seconds": 5025.1234,
+        "db_status": "connected",
+        "db_error": null,
+        "server_time_utc": "2026-06-12T02:30:20Z"
+    },
+    "errors": null
+}
+```
+
+#### ❌ Degraded/Unhealthy — `503 Service Unavailable`
+เกิดขึ้นเมื่อระบบไม่สามารถเชื่อมต่อฐานข้อมูลได้
+```json
+{
+    "status": "unhealthy",
+    "message": "Service is degraded",
+    "data": {
+        "version": "1.0.0",
+        "uptime": "0d 01h 23m 45s",
+        "uptime_seconds": 5025.1234,
+        "db_status": "disconnected",
+        "db_error": "Connection timeout to SQL Server",
+        "server_time_utc": "2026-06-12T02:30:20Z"
+    },
+    "errors": [
+        {
+            "field": "database",
+            "message": "Connection timeout to SQL Server"
+        }
+    ]
+}
+```
+
+---
+
+## 3. POST `/api/call_back`
+ใช้เป็น Endpoint รับผลการประมวลผล OCR ที่ระบบภายนอกส่งกลับมา (Callback) เพื่อทำการบันทึกข้อมูลเข้าฐานข้อมูล LIMS
+
+### Request
+* **Method:** `POST`
+* **Path:** `/api/call_back`
+* **Headers:** `Content-Type: application/json`
+
+#### 📋 Request Body JSON Schema
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `job_task_id` | string | ✅ | ID ของงาน OCR (ห้ามเป็นค่าว่าง) |
+| `ocr_result` | array | ✅ | รายการข้อมูลผลลัพธ์ของแต่ละหน้า (ห้ามว่าง) |
+| `ocr_result[].page_id` | int | ✅ | หมายเลขหน้า (ต้องมีค่ามากกว่า 0) |
+| `ocr_result[].tracking_id` | string | ❌ | ID สำหรับติดตามสถานะหน้านั้น |
+| `ocr_result[].tracking_status` | string | ✅ | สถานะประมวลผลของหน้า (ห้ามเป็นค่าว่าง เช่น `ReadyToCheck`, `SUCCESS`) |
+| `ocr_result[].body_json` | object | ❌ | ข้อมูลค่าที่สแกนได้ในหน้านั้น (กรณีไม่มีข้อมูล/สแกนไม่สำเร็จสามารถเว้นว่างได้) |
+| `ocr_result[].body_json.product_name` | string | ❌ | ชื่อสินค้าที่อ่านได้ |
+| `ocr_result[].body_json.document_type` | string | ❌ | ประเภทของเอกสาร (เช่น COA) |
+| `ocr_result[].body_json.Supplier_name` | string | ❌ | ชื่อ/รหัสผู้จัดส่ง (Supplier) |
+| `ocr_result[].body_json.lot_number` | string | ❌ | หมายเลขลอต (Lot Number) |
+| `ocr_result[].body_json.origin_supplier_name` | string | ❌ | ชื่อผู้จัดส่งต้นทางที่ปรากฏบนหน้าเอกสาร |
+| `ocr_result[].body_json.origin_product_name` | string | ❌ | ชื่อสินค้าต้นทางที่ปรากฏบนหน้าเอกสาร |
+| `ocr_result[].body_json.expiry_date` | string | ❌ | วันหมดอายุของสินค้า (แนะนำรูปแบบ: `DD/MM/YYYY`) |
+| `ocr_result[].body_json.mfg_date` | string | ❌ | วันที่ผลิตสินค้า (แนะนำรูปแบบ: `DD/MM/YYYY`) |
+| `ocr_result[].body_json.Internal_lot` | string | ❌ | รหัส Internal Lot ในระบบ |
+| `ocr_result[].body_json.quantity` | string | ❌ | จำนวนตัวเลข (จะแปลงเป็น decimal บันทึกเข้าระบบ) |
+| `ocr_result[].body_json.body_item` | array | ❌ | รายการผลทดสอบที่พบบนหน้าเอกสาร |
+| `ocr_result[].body_json.body_item[].parameter_name` | string | ✅ | ชื่อพารามิเตอร์การทดสอบ (ห้ามเป็นค่าว่างถ้าส่งมา) |
+| `ocr_result[].body_json.body_item[].result` | string | ❌ | ผลลัพธ์ของการทดสอบ |
+| `ocr_result[].body_json.body_item[].uom` | string | ❌ | หน่วยวัด (Unit of Measurement) |
+
+#### 📝 Request Body Example
+```json
+{
+    "job_task_id": "JOB-TEST-001",
+    "ocr_result": [
+        {
+            "page_id": 1,
+            "tracking_id": "TRACK-001",
+            "tracking_status": "ReadyToCheck",
+            "body_json": {
+                "product_name": "Sample Product",
+                "document_type": "COA",
+                "Supplier_name": "Sample Supplier",
+                "lot_number": "LOT-001",
+                "origin_supplier_name": "Origin Supplier",
+                "origin_product_name": "Origin Product",
+                "expiry_date": "31/12/2026",
+                "mfg_date": "01/01/2026",
+                "Internal_lot": "INT-001",
+                "quantity": "10.50",
+                "body_item": [
+                    {
+                        "parameter_name": "Moisture",
+                        "result": "5.20",
+                        "uom": "%"
+                    }
+                ]
+            }
+        }
+    ]
+}
+```
+
+### Response
+#### ✅ Success — `200 OK`
+ส่งข้อมูล callback สำเร็จและถูกบันทึกลงตารางฐานข้อมูล `t_interface_lims_ocr_callback`, `t_interface_lims_ocr_result`, และ `t_interface_lims_ocr_result_item`
+```json
+{
+    "status": "success",
+    "message": "รับข้อมูล callback สำเร็จ",
+    "data": {
+        "callback_id": "e9a0dbcf-8efb-4cc8-8d02-e25df600b3e5",
+        "job_task_id": "JOB-TEST-001",
+        "result_count": 1,
+        "item_count": 1
+    },
+    "errors": null
+}
+```
+
+#### ❌ Bad Request — `400 Bad Request`
+เกิดขึ้นเมื่อโครงสร้างข้อมูลไม่ถูกต้องตาม Validation Rules
+* **กรณีลืมส่ง `job_task_id` หรือส่งค่าว่าง:**
+  ```json
+  {
+      "status": "error",
+      "message": "ข้อมูลไม่ถูกต้อง",
+      "data": {},
+      "errors": [
+          {
+              "field": "job_task_id",
+              "message": "ห้ามเว้นว่าง"
+          }
+      ]
+  }
+  ```
+* **กรณีส่ง `page_id <= 0`:**
+  ```json
+  {
+      "status": "error",
+      "message": "ข้อมูลไม่ถูกต้อง",
+      "data": {},
+      "errors": [
+          {
+              "field": "page_id",
+              "message": "ต้องมากกว่า 0"
+          }
+      ]
+  }
+  ```
+* **กรณีมี `body_item` แต่ส่ง `parameter_name` เป็นค่าว่าง:**
+  ```json
+  {
+      "status": "error",
+      "message": "ข้อมูลไม่ถูกต้อง",
+      "data": {},
+      "errors": [
+          {
+              "field": "parameter_name",
+              "message": "ห้ามเว้นว่าง"
+          }
+      ]
+  }
+  ```
