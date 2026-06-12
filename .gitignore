@@ -62,3 +62,6 @@ global.json.user
 appsettings.Development.json
 appsettings.Local.json
 .env
+
+# Publish directory
+publish/
