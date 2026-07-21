@@ -2,7 +2,8 @@ Write-Host "===================================================" -ForegroundColo
 Write-Host "Publishing LIMS AJT NK API (Release Mode)..." -ForegroundColor Cyan
 Write-Host "===================================================" -ForegroundColor Cyan
 
-$PublishDir = "./publish"
+$ApiProject = "./src/LIMS_AJT_NK_API/LIMS_AJT_NK_API.csproj"
+$PublishDir = "./publish/api"
 
 # 1. Clean old folder if exists
 if (Test-Path $PublishDir) {
@@ -12,7 +13,7 @@ if (Test-Path $PublishDir) {
 
 # 2. Run dotnet publish
 Write-Host "Running dotnet publish..." -ForegroundColor Yellow
-dotnet publish LIMS_AJT_NK_API.csproj -c Release -o $PublishDir
+dotnet publish $ApiProject -c Release -o $PublishDir
 
 # 3. Check exit code
 if ($LASTEXITCODE -eq 0) {
@@ -21,7 +22,8 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "[SUCCESS] API published successfully!" -ForegroundColor Green
     Write-Host "Path: $((Get-Item $PublishDir).FullName)" -ForegroundColor Green
     Write-Host "===================================================" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host ""
     Write-Host "[ERROR] Publish failed! Please check the errors above." -ForegroundColor Red
     exit $LASTEXITCODE

@@ -1,0 +1,35 @@
+using LIMS_AJT_NK_API.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace LIMS_AJT_NK_API.Data;
+
+public static class DbSeeder
+{
+    public static async Task SeedAsync(ApplicationDbContext dbContext, CancellationToken cancellationToken = default)
+    {
+        await dbContext.Database.MigrateAsync(cancellationToken);
+
+        if (await dbContext.InterfaceLimsOcrConfigApis.AnyAsync(cancellationToken))
+        {
+            return;
+        }
+
+        dbContext.InterfaceLimsOcrConfigApis.Add(new InterfaceLimsOcrConfigApiEntity
+        {
+            IsEnabled = true,
+            InputOcrUrl = "http://localhost:5117/input_ocr",
+            CallbackUrl = "http://localhost:5117/api/call_back",
+            InboundDirectory = "1_Inbound",
+            ProcessingDirectory = "2_Processing",
+            SuccessDirectory = "3_Success",
+            ErrorDirectory = "4_Error",
+            FlowId = null,
+            IntervalSeconds = 30,
+            IsInterface = false,
+            CreateBy = "system",
+            CreateDate = DateTime.Now
+        });
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+}

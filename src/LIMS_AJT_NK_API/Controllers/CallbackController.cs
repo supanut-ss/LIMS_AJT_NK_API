@@ -2,6 +2,7 @@ using LIMS_AJT_NK_API.Data;
 using LIMS_AJT_NK_API.Models;
 using Microsoft.AspNetCore.Mvc;
 using System.Globalization;
+using System.Text.Json;
 
 namespace LIMS_AJT_NK_API.Controllers;
 
@@ -42,8 +43,8 @@ public class CallbackController(ApplicationDbContext dbContext) : ControllerBase
         var uptime = DateTime.UtcNow - process.StartTime.ToUniversalTime();
 
         var assembly = typeof(Program).Assembly;
-        var version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(assembly)?.InformationalVersion 
-                      ?? assembly.GetName().Version?.ToString() 
+        var version = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(assembly)?.InformationalVersion
+                      ?? assembly.GetName().Version?.ToString()
                       ?? "1.0.0";
 
         var isHealthy = isDbHealthy;
@@ -195,6 +196,33 @@ public class CallbackController(ApplicationDbContext dbContext) : ControllerBase
         }
 
         callback.Results = resultRows;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        dbContext.InterfaceLimsOcrLogs.Add(new InterfaceLimsOcrLogEntity
+        {
+            LogId = Guid.NewGuid(),
+            ApiName = "call_back",
+            RequestUrl = "/api/call_back",
+            JobTaskId = normalizedJobTaskId,
+            FilePath = null,
+            RequestPayload = JsonSerializer.Serialize(request),
+            ResponseStatusCode = 200,
+            ResponsePayload = JsonSerializer.Serialize(new
+            {
+                status = "success",
+                message = "รับข้อมูล callback สำเร็จ"
+            }),
+            IsSuccess = true,
+            ErrorMessage = null,
+            SourceSystem = "api",
+            WorkStatus = "callback_received",
+            FinalPath = null,
+            CompletedDate = DateTime.Now,
+            IsInterface = false,
+            CreateBy = "api",
+            CreateDate = now
+        });
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return Ok(new

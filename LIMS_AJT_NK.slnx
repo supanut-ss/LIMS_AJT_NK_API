@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LIMS_AJT_NK_API/LIMS_AJT_NK_API.csproj" />
+    <Project Path="src/LIMS_AJT_NK_CallbackWorker/LIMS_AJT_NK_CallbackWorker.csproj" />
+  </Folder>
+</Solution>

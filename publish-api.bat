@@ -4,7 +4,8 @@ echo Publishing LIMS AJT NK API (Release Mode)...
 echo ===================================================
 
 REM Define output directory
-set PUBLISH_DIR=.\publish
+set API_PROJECT=.\src\LIMS_AJT_NK_API\LIMS_AJT_NK_API.csproj
+set PUBLISH_DIR=.\publish\api
 
 REM Clean old publish directory if exists
 if exist %PUBLISH_DIR% (
@@ -14,7 +15,7 @@ if exist %PUBLISH_DIR% (
 
 REM Run dotnet publish
 echo Running dotnet publish...
-dotnet publish LIMS_AJT_NK_API.csproj -c Release -o %PUBLISH_DIR%
+dotnet publish %API_PROJECT% -c Release -o %PUBLISH_DIR%
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -26,6 +27,6 @@ if %ERRORLEVEL% NEQ 0 (
 echo.
 echo ===================================================
 echo [SUCCESS] API published successfully!
-echo Path: %CD%\publish
+echo Path: %CD%\publish\api
 echo ===================================================
 pause
