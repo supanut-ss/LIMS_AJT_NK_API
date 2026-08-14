@@ -10,6 +10,15 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<InterfaceLimsOcrCallbackEntity> InterfaceLimsOcrCallbacks => Set<InterfaceLimsOcrCallbackEntity>();
     public DbSet<InterfaceLimsOcrResultEntity> InterfaceLimsOcrResults => Set<InterfaceLimsOcrResultEntity>();
     public DbSet<InterfaceLimsOcrResultItemEntity> InterfaceLimsOcrResultItems => Set<InterfaceLimsOcrResultItemEntity>();
+    public DbSet<LimsCoaParameterMappingEntity> LimsCoaParameterMappings => Set<LimsCoaParameterMappingEntity>();
+    public DbSet<LimsInboundReceiveEntity> LimsInboundReceives => Set<LimsInboundReceiveEntity>();
+    public DbSet<LimsQaqcScanEntity> LimsQaqcScans => Set<LimsQaqcScanEntity>();
+    public DbSet<LimsDocumentEntity> LimsDocuments => Set<LimsDocumentEntity>();
+    public DbSet<LimsQaqcCoaParameterTestEntity> LimsQaqcCoaParameterTests => Set<LimsQaqcCoaParameterTestEntity>();
+    public DbSet<LimsQaqcCoaParameterTransactionEntity> LimsQaqcCoaParameterTransactions => Set<LimsQaqcCoaParameterTransactionEntity>();
+    public DbSet<WmsItemEntity> WmsItems => Set<WmsItemEntity>();
+    public DbSet<LimsCoaParameterEntity> LimsCoaParameters => Set<LimsCoaParameterEntity>();
+    public DbSet<LimsManageCoaParameterEntity> LimsManageCoaParameters => Set<LimsManageCoaParameterEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -142,5 +151,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
                 .HasForeignKey(x => x.ResultId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+        modelBuilder.ConfigureLimsEntities();
     }
 }

@@ -36,3 +36,11 @@ dotnet build .\src\LIMS_AJT_NK_CallbackWorker\LIMS_AJT_NK_CallbackWorker.csproj
   - `t_interface_lims_ocr_callback`
   - `t_interface_lims_ocr_result`
   - `t_interface_lims_ocr_result_item`
+
+รายละเอียดการจับคู่และ response: [OCR Callback QAQC](docs/OCR_CALLBACK_QAQC.md)
+
+## Test
+
+```powershell
+dotnet test .\tests\LIMS_AJT_NK_API.Tests\LIMS_AJT_NK_API.Tests.csproj
+```

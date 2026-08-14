@@ -3,4 +3,7 @@
     <Project Path="src/LIMS_AJT_NK_API/LIMS_AJT_NK_API.csproj" />
     <Project Path="src/LIMS_AJT_NK_CallbackWorker/LIMS_AJT_NK_CallbackWorker.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LIMS_AJT_NK_API.Tests/LIMS_AJT_NK_API.Tests.csproj" />
+  </Folder>
 </Solution>
