@@ -42,6 +42,18 @@ public sealed class OcrCallbackInterfacePageResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Reason { get; set; }
 
+    [JsonPropertyName("document_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DocumentStatus { get; set; }
+
+    [JsonPropertyName("document_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? DocumentId { get; set; }
+
+    [JsonPropertyName("document_path")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DocumentPath { get; set; }
+
     [JsonPropertyName("updated_item_count")]
     public int UpdatedItemCount { get; set; }
 

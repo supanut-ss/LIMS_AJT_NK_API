@@ -25,8 +25,15 @@ public class WorkerDbContext(DbContextOptions<WorkerDbContext> options) : DbCont
             entity.Property(x => x.ProcessingDirectory).HasColumnName("processing_directory").HasMaxLength(500).IsRequired();
             entity.Property(x => x.SuccessDirectory).HasColumnName("success_directory").HasMaxLength(500).IsRequired();
             entity.Property(x => x.ErrorDirectory).HasColumnName("error_directory").HasMaxLength(500).IsRequired();
+            entity.Property(x => x.DocumentHostDirectory).HasColumnName("document_host_directory").HasMaxLength(500);
+            entity.Property(x => x.DocumentWebPath).HasColumnName("document_web_path").HasMaxLength(500);
+            entity.Property(x => x.DocumentGroup).HasColumnName("document_group").HasMaxLength(64);
             entity.Property(x => x.FlowId).HasColumnName("flow_id").HasMaxLength(100);
             entity.Property(x => x.IntervalSeconds).HasColumnName("interval_seconds").HasDefaultValue(30);
+            entity.Property(x => x.FileStableSeconds).HasColumnName("file_stable_seconds").HasDefaultValue(5);
+            entity.Property(x => x.MaxSendAttempts).HasColumnName("max_send_attempts").HasDefaultValue(3);
+            entity.Property(x => x.RetryDelaySeconds).HasColumnName("retry_delay_seconds").HasDefaultValue(5);
+            entity.Property(x => x.RequestTimeoutSeconds).HasColumnName("request_timeout_seconds").HasDefaultValue(60);
             entity.Property(x => x.IsInterface).HasColumnName("is_interface").HasColumnType("bit").HasDefaultValue(false);
             entity.Property(x => x.CreateBy).HasColumnName("create_by").HasMaxLength(25);
             entity.Property(x => x.CreateDate).HasColumnName("create_date").HasColumnType("datetime").HasDefaultValueSql("GETDATE()");
@@ -50,6 +57,7 @@ public class WorkerDbContext(DbContextOptions<WorkerDbContext> options) : DbCont
             entity.Property(x => x.ErrorMessage).HasColumnName("error_message");
             entity.Property(x => x.SourceSystem).HasColumnName("source_system").HasMaxLength(50);
             entity.Property(x => x.WorkStatus).HasColumnName("work_status").HasMaxLength(50).HasDefaultValue("submitted");
+            entity.Property(x => x.AttemptCount).HasColumnName("attempt_count").HasDefaultValue(0);
             entity.Property(x => x.FinalPath).HasColumnName("final_path").HasMaxLength(500);
             entity.Property(x => x.CompletedDate).HasColumnName("completed_date").HasColumnType("datetime");
             entity.Property(x => x.IsInterface).HasColumnName("is_interface").HasColumnType("bit").HasDefaultValue(false);

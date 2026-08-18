@@ -16,6 +16,7 @@ BEGIN
         error_message NVARCHAR(MAX) NULL,
         source_system NVARCHAR(50) NULL,
         work_status NVARCHAR(50) NOT NULL CONSTRAINT df_t_interface_lims_ocr_log_work_status DEFAULT(N'submitted'),
+        attempt_count INT NOT NULL CONSTRAINT df_t_interface_lims_ocr_log_attempt_count DEFAULT(0),
         final_path NVARCHAR(500) NULL,
         completed_date DATETIME NULL,
         is_interface BIT NOT NULL CONSTRAINT df_t_interface_lims_ocr_log_is_interface DEFAULT(0),

@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,10 +17,15 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\LIMS_AJT_NK_API\LIMS_AJT_NK_API.csproj" />
+    <ProjectReference Include="..\..\src\LIMS_AJT_NK_CallbackWorker\LIMS_AJT_NK_CallbackWorker.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="TestData\refined_salt_callback.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

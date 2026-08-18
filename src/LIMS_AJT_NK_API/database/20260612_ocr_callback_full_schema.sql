@@ -39,6 +39,7 @@ BEGIN
         [callback_id]          UNIQUEIDENTIFIER NOT NULL,
         [is_interface]         BIT              NOT NULL CONSTRAINT [df_ocr_result_is_interface] DEFAULT (0),
         [page_id]              INT              NOT NULL,
+        [file_id]              VARCHAR(100)     NULL,
         [tracking_id]          VARCHAR(100)     NULL,
         [tracking_status]      VARCHAR(50)      NOT NULL,
         [product_name]         VARCHAR(255)     NULL,
@@ -51,6 +52,8 @@ BEGIN
         [mfg_date]             DATE             NULL,
         [internal_lot]         VARCHAR(50)      NULL,
         [quantity]             DECIMAL(18, 4)   NULL,
+        [quantity_uom]         VARCHAR(25)      NULL,
+        [confident_json]       NVARCHAR(MAX)    NULL,
         [create_by]            VARCHAR(25)      NULL,
         [create_date]          DATETIME         NOT NULL CONSTRAINT [df_ocr_result_create_date] DEFAULT (GETDATE()),
         CONSTRAINT [pk_ocr_result_id] PRIMARY KEY CLUSTERED ([result_id] ASC),
@@ -64,6 +67,9 @@ BEGIN
         
     CREATE INDEX [idx_ocr_result_tracking_id] 
         ON [dbo].[t_interface_lims_ocr_result] ([tracking_id] ASC);
+
+    CREATE INDEX [idx_ocr_result_file_id]
+        ON [dbo].[t_interface_lims_ocr_result] ([file_id] ASC);
         
     CREATE INDEX [idx_ocr_result_tracking_status] 
         ON [dbo].[t_interface_lims_ocr_result] ([tracking_status] ASC);

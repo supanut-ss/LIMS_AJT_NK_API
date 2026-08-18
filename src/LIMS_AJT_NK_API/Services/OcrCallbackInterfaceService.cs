@@ -28,6 +28,7 @@ public sealed class OcrCallbackInterfaceService(
             ?? throw new InvalidOperationException($"OCR callback '{callbackId}' was not found.");
 
         ResetInterfaceFlags(callback);
+        var createdDocumentPaths = new List<string>();
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
@@ -66,8 +67,20 @@ public sealed class OcrCallbackInterfaceService(
                     ? OcrInterfaceStatuses.NotMatched
                     : OcrInterfaceStatuses.Partial;
 
+            var documentBindings = await StoreDocumentsAsync(
+                callback,
+                summary.Pages,
+                createdDocumentPaths,
+                cancellationToken);
+
             callback.IsInterface = completed;
             await dbContext.SaveChangesAsync(cancellationToken);
+
+            foreach (var binding in documentBindings)
+            {
+                binding.Page.DocumentId = binding.Document.DocumentId;
+            }
+
             await transaction.CommitAsync(cancellationToken);
 
             logger.LogInformation(
@@ -83,9 +96,203 @@ public sealed class OcrCallbackInterfaceService(
         {
             await transaction.RollbackAsync(CancellationToken.None);
             dbContext.ChangeTracker.Clear();
+            DeleteCreatedDocuments(createdDocumentPaths);
             throw;
         }
     }
+
+    private async Task<List<DocumentBinding>> StoreDocumentsAsync(
+        InterfaceLimsOcrCallbackEntity callback,
+        IReadOnlyCollection<OcrCallbackInterfacePageResult> pages,
+        ICollection<string> createdDocumentPaths,
+        CancellationToken cancellationToken)
+    {
+        var eligiblePages = pages
+            .Where(x => x.ReceiptDetailId.HasValue && x.Status != "ignored")
+            .ToList();
+
+        if (eligiblePages.Count == 0)
+        {
+            return [];
+        }
+
+        var config = await dbContext.InterfaceLimsOcrConfigApis
+            .AsNoTracking()
+            .OrderByDescending(x => x.CreateDate)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(config?.DocumentHostDirectory))
+        {
+            foreach (var page in eligiblePages)
+            {
+                page.DocumentStatus = "not_configured";
+            }
+
+            return [];
+        }
+
+        var documentGroup = string.IsNullOrWhiteSpace(config.DocumentGroup)
+            ? "QC_COA"
+            : config.DocumentGroup.Trim();
+        ValidateDocumentGroup(documentGroup);
+
+        var sourceLog = await dbContext.InterfaceLimsOcrLogs
+            .AsNoTracking()
+            .Where(x => x.ApiName == "input_ocr"
+                && x.JobTaskId == callback.JobTaskId
+                && x.FilePath != null)
+            .OrderByDescending(x => x.CreateDate)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Input OCR file log was not found for job_task_id '{callback.JobTaskId}'.");
+
+        var sourcePath = Path.GetFullPath(sourceLog.FilePath!);
+        if (!File.Exists(sourcePath))
+        {
+            throw new FileNotFoundException("Input OCR source file was not found.", sourcePath);
+        }
+
+        var hostRoot = Path.GetFullPath(config.DocumentHostDirectory.Trim());
+        var targetDirectory = Path.GetFullPath(Path.Combine(hostRoot, documentGroup));
+        EnsurePathIsWithinRoot(hostRoot, targetDirectory);
+        Directory.CreateDirectory(targetDirectory);
+
+        var webRoot = string.IsNullOrWhiteSpace(config.DocumentWebPath)
+            ? "../_Documents"
+            : config.DocumentWebPath.Trim();
+        var originalDocumentName = GetOriginalFileName(sourcePath);
+        var extension = Path.GetExtension(sourcePath).ToLowerInvariant();
+        var bindings = new List<DocumentBinding>();
+        var documentsByReceipt = new Dictionary<Guid, LimsDocumentEntity>();
+
+        foreach (var page in eligiblePages)
+        {
+            var receiptDetailId = page.ReceiptDetailId!.Value;
+            if (documentsByReceipt.TryGetValue(receiptDetailId, out var currentDocument))
+            {
+                page.DocumentStatus = "stored";
+                page.DocumentPath = currentDocument.DocumentPath;
+                bindings.Add(new DocumentBinding(page, currentDocument));
+                continue;
+            }
+
+            var existingDocument = await dbContext.LimsDocuments
+                .FirstOrDefaultAsync(x => x.PkId == receiptDetailId
+                    && x.DocumentGroup == documentGroup
+                    && x.Udf1 == callback.JobTaskId
+                    && x.IsActive != false,
+                    cancellationToken);
+
+            if (existingDocument is not null)
+            {
+                documentsByReceipt[receiptDetailId] = existingDocument;
+                page.DocumentStatus = "already_exists";
+                page.DocumentId = existingDocument.DocumentId;
+                page.DocumentPath = existingDocument.DocumentPath;
+                continue;
+            }
+
+            var storedFileName = $"{receiptDetailId:N}_{DateTime.UtcNow:yyyyMMddHHmmssfff}_{Guid.NewGuid():N}{extension}";
+            var destinationPath = Path.GetFullPath(Path.Combine(targetDirectory, storedFileName));
+            EnsurePathIsWithinRoot(targetDirectory, destinationPath);
+            File.Copy(sourcePath, destinationPath, overwrite: false);
+            createdDocumentPaths.Add(destinationPath);
+
+            var result = callback.Results.Single(x => x.PageId == page.PageId);
+            var document = new LimsDocumentEntity
+            {
+                PkId = receiptDetailId,
+                DocumentGroup = documentGroup,
+                DocumentType = GetContentType(extension),
+                DocumentCode = "--",
+                DocumentName = originalDocumentName,
+                DocumentPath = BuildWebPath(webRoot, documentGroup, storedFileName),
+                Description = "OCR callback document",
+                Udf1 = callback.JobTaskId,
+                Udf2 = callback.CallbackId.ToString(),
+                Udf3 = result.FileId ?? result.TrackingId,
+                IsActive = true,
+                CreateBy = InterfaceUser,
+                CreateDate = DateTime.Now
+            };
+
+            dbContext.LimsDocuments.Add(document);
+            documentsByReceipt[receiptDetailId] = document;
+            page.DocumentStatus = "stored";
+            page.DocumentPath = document.DocumentPath;
+            bindings.Add(new DocumentBinding(page, document));
+        }
+
+        return bindings;
+    }
+
+    private static void ValidateDocumentGroup(string documentGroup)
+    {
+        if (documentGroup is "." or ".."
+            || documentGroup.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        {
+            throw new InvalidOperationException("OCR document_group must be a single directory name.");
+        }
+    }
+
+    private static void EnsurePathIsWithinRoot(string rootPath, string candidatePath)
+    {
+        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath))
+            + Path.DirectorySeparatorChar;
+        var normalizedCandidate = Path.GetFullPath(candidatePath);
+
+        if (!normalizedCandidate.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("OCR document path is outside the configured Host directory.");
+        }
+    }
+
+    private static string BuildWebPath(string webRoot, string documentGroup, string storedFileName)
+    {
+        var normalizedRoot = webRoot.Replace('\\', '/').TrimEnd('/');
+        return $"{normalizedRoot}/{documentGroup}/{storedFileName}";
+    }
+
+    private static string GetOriginalFileName(string sourcePath)
+    {
+        var fileName = Path.GetFileName(sourcePath);
+        const int workerPrefixLength = 51;
+
+        if (fileName.Length > workerPrefixLength
+            && fileName[17] == '_'
+            && fileName[50] == '_')
+        {
+            return fileName[workerPrefixLength..];
+        }
+
+        return fileName;
+    }
+
+    private static string GetContentType(string extension)
+    {
+        return extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase)
+            ? "application/pdf"
+            : "application/octet-stream";
+    }
+
+    private static void DeleteCreatedDocuments(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch
+            {
+                // Preserve the original database/interface exception.
+            }
+        }
+    }
+
+    private sealed record DocumentBinding(
+        OcrCallbackInterfacePageResult Page,
+        LimsDocumentEntity Document);
 
     private async Task<OcrCallbackInterfacePageResult> ProcessResultAsync(
         InterfaceLimsOcrResultEntity result,
@@ -100,7 +307,9 @@ public sealed class OcrCallbackInterfaceService(
 
         var productName = result.ProductName!.Trim();
         var supplierName = result.SupplierName!.Trim();
-        var lotNumber = result.LotNumber!.Trim();
+        var lotNumber = !string.IsNullOrWhiteSpace(result.LotNumber)
+            ? result.LotNumber.Trim()
+            : result.InternalLot!.Trim();
         var mfgDate = result.MfgDate!.Value.Date;
 
         var inboundCandidates = await (
@@ -331,7 +540,7 @@ public sealed class OcrCallbackInterfaceService(
             return "supplier_name_missing";
         }
 
-        if (string.IsNullOrWhiteSpace(result.LotNumber))
+        if (string.IsNullOrWhiteSpace(result.LotNumber) && string.IsNullOrWhiteSpace(result.InternalLot))
         {
             return "lot_number_missing";
         }

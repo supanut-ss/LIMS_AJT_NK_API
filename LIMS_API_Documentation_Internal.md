@@ -94,24 +94,26 @@
 |---|---|---|---|
 | `job_task_id` | string | ✅ | ID ของงาน OCR (ห้ามเป็นค่าว่าง) |
 | `ocr_result` | array | ✅ | รายการข้อมูลผลลัพธ์ของแต่ละหน้า (ห้ามว่าง) |
-| `ocr_result[].page_id` | int | ✅ | หมายเลขหน้า (ต้องมีค่ามากกว่า 0) |
+| `ocr_result[].page_id` | int | ⚠️ | หมายเลขหน้า (ต้องมากกว่า 0 เมื่อไม่มี `file_id`) |
+| `ocr_result[].file_id` | string | ⚠️ | ID ไฟล์จาก OCR (ต้องส่ง `page_id` หรือ `file_id` อย่างน้อยหนึ่งค่า) |
 | `ocr_result[].tracking_id` | string | ❌ | ID สำหรับติดตามสถานะหน้านั้น |
 | `ocr_result[].tracking_status` | string | ✅ | สถานะประมวลผลของหน้า (ห้ามเป็นค่าว่าง เช่น `ReadyToCheck`, `SUCCESS`) |
 | `ocr_result[].body_json` | object | ❌ | ข้อมูลค่าที่สแกนได้ในหน้านั้น (กรณีไม่มีข้อมูล/สแกนไม่สำเร็จสามารถเว้นว่างได้) |
 | `ocr_result[].body_json.product_name` | string | ❌ | ชื่อสินค้าที่อ่านได้ |
 | `ocr_result[].body_json.document_type` | string | ❌ | ประเภทของเอกสาร (เช่น COA) |
 | `ocr_result[].body_json.Supplier_name` | string | ❌ | ชื่อ/รหัสผู้จัดส่ง (Supplier) |
-| `ocr_result[].body_json.lot_number` | string | ❌ | หมายเลขลอต (Lot Number) |
+| `ocr_result[].body_json.lot_number` | string | ❌ | หมายเลขลอต; ถ้าว่างระบบจะใช้ `Internal_lot` แทน |
 | `ocr_result[].body_json.origin_supplier_name` | string | ❌ | ชื่อผู้จัดส่งต้นทางที่ปรากฏบนหน้าเอกสาร |
 | `ocr_result[].body_json.origin_product_name` | string | ❌ | ชื่อสินค้าต้นทางที่ปรากฏบนหน้าเอกสาร |
 | `ocr_result[].body_json.expiry_date` | string | ❌ | วันหมดอายุของสินค้า (แนะนำรูปแบบ: `DD/MM/YYYY`) |
 | `ocr_result[].body_json.mfg_date` | string | ❌ | วันที่ผลิตสินค้า (แนะนำรูปแบบ: `DD/MM/YYYY`) |
 | `ocr_result[].body_json.Internal_lot` | string | ❌ | รหัส Internal Lot ในระบบ |
-| `ocr_result[].body_json.quantity` | string | ❌ | จำนวนตัวเลข (จะแปลงเป็น decimal บันทึกเข้าระบบ) |
+| `ocr_result[].body_json.quantity` | string | ❌ | จำนวนและหน่วย เช่น `94000 kg` โดยระบบจะแยกเป็น quantity และ quantity_uom |
 | `ocr_result[].body_json.body_item` | array | ❌ | รายการผลทดสอบที่พบบนหน้าเอกสาร |
 | `ocr_result[].body_json.body_item[].parameter_name` | string | ✅ | ชื่อพารามิเตอร์การทดสอบ (ห้ามเป็นค่าว่างถ้าส่งมา) |
 | `ocr_result[].body_json.body_item[].result` | string | ❌ | ผลลัพธ์ของการทดสอบ |
 | `ocr_result[].body_json.body_item[].uom` | string | ❌ | หน่วยวัด (Unit of Measurement) |
+| `ocr_result[].confident` | object | ❌ | ค่า confidence จาก OCR เก็บทั้งก้อนใน `confident_json` |
 
 #### 📝 Request Body Example
 ```json
@@ -119,20 +121,20 @@
     "job_task_id": "JOB-TEST-001",
     "ocr_result": [
         {
-            "page_id": 1,
+            "file_id": "6a8283ddb3b7d074da97e8f1",
             "tracking_id": "TRACK-001",
             "tracking_status": "ReadyToCheck",
             "body_json": {
                 "product_name": "Sample Product",
                 "document_type": "COA",
                 "Supplier_name": "Sample Supplier",
-                "lot_number": "LOT-001",
+                "lot_number": null,
                 "origin_supplier_name": "Origin Supplier",
                 "origin_product_name": "Origin Product",
                 "expiry_date": "31/12/2026",
                 "mfg_date": "01/01/2026",
-                "Internal_lot": "INT-001",
-                "quantity": "10.50",
+                "Internal_lot": "LOT-001",
+                "quantity": "10.50 kg",
                 "body_item": [
                     {
                         "parameter_name": "Moisture",
@@ -148,7 +150,7 @@
 
 ### Response
 #### ✅ Success — `200 OK`
-ส่งข้อมูล callback สำเร็จและถูกบันทึกลงตารางฐานข้อมูล `t_interface_lims_ocr_callback`, `t_interface_lims_ocr_result`, และ `t_interface_lims_ocr_result_item`
+ส่งข้อมูล callback สำเร็จและถูกบันทึกลงตารางฐานข้อมูล `t_interface_lims_ocr_callback`, `t_interface_lims_ocr_result`, และ `t_interface_lims_ocr_result_item` หลังจับคู่ inbound ระบบจะ copy ไฟล์ไปยัง Host และเพิ่ม `t_lims_documents` เมื่อกำหนด `document_host_directory` แล้ว
 ```json
 {
     "status": "success",
@@ -157,7 +159,23 @@
         "callback_id": "e9a0dbcf-8efb-4cc8-8d02-e25df600b3e5",
         "job_task_id": "JOB-TEST-001",
         "result_count": 1,
-        "item_count": 1
+        "item_count": 1,
+        "interface_status": "completed",
+        "updated_item_count": 1,
+        "skipped_item_count": 0,
+        "pages": [
+            {
+                "page_id": 1,
+                "receipt_detail_id": "f835b76a-60c6-4ab3-abdb-e7355e2aa66a",
+                "status": "completed",
+                "document_status": "stored",
+                "document_id": 12345,
+                "document_path": "../_Documents/QC_COA/example.pdf",
+                "updated_item_count": 1,
+                "skipped_item_count": 0,
+                "items": []
+            }
+        ]
     },
     "errors": null
 }
@@ -179,7 +197,7 @@
       ]
   }
   ```
-* **กรณีส่ง `page_id <= 0`:**
+* **กรณีไม่ส่งทั้ง `page_id` และ `file_id`:**
   ```json
   {
       "status": "error",
@@ -187,8 +205,8 @@
       "data": {},
       "errors": [
           {
-              "field": "page_id",
-              "message": "ต้องมากกว่า 0"
+              "field": "page_id/file_id",
+              "message": "ต้องส่ง page_id ที่มากกว่า 0 หรือ file_id อย่างน้อยหนึ่งค่า"
           }
       ]
   }

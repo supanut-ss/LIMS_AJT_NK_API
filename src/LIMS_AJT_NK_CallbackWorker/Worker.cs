@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using LIMS_AJT_NK_CallbackWorker.Data;
@@ -35,17 +36,28 @@ public class Worker(
                 else
                 {
                     EnsureDirectories(config);
+                    await RecoverSendingJobsAsync(client, config, stoppingToken);
                     await FinalizeCompletedJobsAsync(config, stoppingToken);
                     await ProcessInboundFolderAsync(client, config, stoppingToken);
                 }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Error while processing inbound files.");
             }
 
-            var interval = await GetIntervalAsync(stoppingToken);
-            await Task.Delay(interval, stoppingToken);
+            try
+            {
+                await Task.Delay(await GetIntervalAsync(stoppingToken), stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
         }
     }
 
@@ -60,7 +72,10 @@ public class Worker(
         return TimeSpan.FromSeconds(intervalSeconds <= 0 ? 30 : intervalSeconds);
     }
 
-    private async Task ProcessInboundFolderAsync(HttpClient client, LimsOcrConfigApiEntity config, CancellationToken stoppingToken)
+    private async Task ProcessInboundFolderAsync(
+        HttpClient client,
+        LimsOcrConfigApiEntity config,
+        CancellationToken stoppingToken)
     {
         if (!Directory.Exists(config.InboundDirectory))
         {
@@ -70,123 +85,318 @@ public class Worker(
         var inboundFiles = Directory
             .EnumerateFiles(config.InboundDirectory, "*.*", SearchOption.TopDirectoryOnly)
             .Where(file => string.Equals(Path.GetExtension(file), ".pdf", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(file => File.GetCreationTimeUtc(file))
+            .OrderBy(File.GetCreationTimeUtc)
             .ToList();
 
         foreach (var inboundFile in inboundFiles)
         {
-            if (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
+            stoppingToken.ThrowIfCancellationRequested();
 
-            if (!IsFileReady(inboundFile))
+            if (!SharedFilePolicy.IsReady(inboundFile, config.FileStableSeconds, DateTime.UtcNow))
             {
                 continue;
             }
 
-            var fileName = Path.GetFileName(inboundFile);
-            var processingPath = MoveToFolder(inboundFile, config.ProcessingDirectory, fileName);
-
-            var flowId = string.IsNullOrWhiteSpace(config.FlowId)
-                ? Guid.NewGuid().ToString()
-                : config.FlowId;
-            var jobTaskId = Guid.NewGuid().ToString();
-
-            var payload = new InputOcrRequest
-            {
-                FlowId = flowId,
-                JobTaskId = jobTaskId,
-                S3PathImage = processingPath,
-                CallbackUrl = config.CallbackUrl ?? string.Empty
-            };
-            var requestPayload = JsonSerializer.Serialize(payload);
-
-            logger.LogInformation("Sending input_ocr. File={File}, FlowId={FlowId}, JobTaskId={JobTaskId}", processingPath, flowId, jobTaskId);
-
             try
             {
-                using var response = await client.PostAsJsonAsync(config.InputOcrUrl, payload, stoppingToken);
-                var responseBody = await response.Content.ReadAsStringAsync(stoppingToken);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    logger.LogInformation("input_ocr accepted. File stays in processing until callback arrives. Status={StatusCode}, Body={Body}", (int)response.StatusCode, responseBody);
-
-                    await WriteInterfaceLogAsync(
-                        apiName: "input_ocr",
-                        requestUrl: config.InputOcrUrl,
-                        flowId: payload.FlowId,
-                        jobTaskId: payload.JobTaskId,
-                        filePath: processingPath,
-                        requestPayload: requestPayload,
-                        responseStatusCode: (int)response.StatusCode,
-                        responsePayload: responseBody,
-                        isSuccess: true,
-                        errorMessage: null,
-                        workStatus: "submitted",
-                        finalPath: null,
-                        completedDate: null,
-                        cancellationToken: stoppingToken);
-                }
-                else
-                {
-                    var errorPath = MoveToFolder(processingPath, config.ErrorDirectory, fileName);
-                    logger.LogWarning("input_ocr failed. File moved to {File}. Status={StatusCode}, Body={Body}", errorPath, (int)response.StatusCode, responseBody);
-
-                    await WriteInterfaceLogAsync(
-                        apiName: "input_ocr",
-                        requestUrl: config.InputOcrUrl,
-                        flowId: payload.FlowId,
-                        jobTaskId: payload.JobTaskId,
-                        filePath: errorPath,
-                        requestPayload: requestPayload,
-                        responseStatusCode: (int)response.StatusCode,
-                        responsePayload: responseBody,
-                        isSuccess: false,
-                        errorMessage: "input_ocr rejected request",
-                        workStatus: "send_error",
-                        finalPath: errorPath,
-                        completedDate: DateTime.Now,
-                        cancellationToken: stoppingToken);
-                }
+                await ProcessInboundFileAsync(client, config, inboundFile, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (IOException ex)
+            {
+                logger.LogInformation(ex, "File was already claimed or became unavailable. File={File}", inboundFile);
             }
             catch (Exception ex)
             {
-                var errorPath = MoveToFolder(processingPath, config.ErrorDirectory, fileName);
-                logger.LogError(ex, "Error while sending input_ocr. File moved to {File}.", errorPath);
-
-                await WriteInterfaceLogAsync(
-                    apiName: "input_ocr",
-                    requestUrl: config.InputOcrUrl,
-                    flowId: payload.FlowId,
-                    jobTaskId: payload.JobTaskId,
-                    filePath: errorPath,
-                    requestPayload: requestPayload,
-                    responseStatusCode: null,
-                    responsePayload: null,
-                    isSuccess: false,
-                    errorMessage: ex.Message,
-                    workStatus: "send_error",
-                    finalPath: errorPath,
-                    completedDate: DateTime.Now,
-                    cancellationToken: stoppingToken);
+                logger.LogError(ex, "Failed to process inbound file. File={File}", inboundFile);
             }
         }
     }
 
-    private async Task FinalizeCompletedJobsAsync(LimsOcrConfigApiEntity config, CancellationToken cancellationToken)
+    private async Task ProcessInboundFileAsync(
+        HttpClient client,
+        LimsOcrConfigApiEntity config,
+        string inboundFile,
+        CancellationToken stoppingToken)
     {
-        var pendingJobs = await workerDbContext.InterfaceLimsOcrLogs
-            .AsNoTracking()
-            .Where(x => x.ApiName == "input_ocr" && x.WorkStatus == "submitted" && x.JobTaskId != null && x.FilePath != null)
+        var originalFileName = Path.GetFileName(inboundFile);
+        var processingPath = MoveToFolder(
+            inboundFile,
+            config.ProcessingDirectory,
+            originalFileName);
+        var flowId = string.IsNullOrWhiteSpace(config.FlowId)
+            ? Guid.NewGuid().ToString()
+            : config.FlowId;
+        var jobTaskId = Guid.NewGuid().ToString();
+        var payload = new InputOcrRequest
+        {
+            FlowId = flowId,
+            JobTaskId = jobTaskId,
+            S3PathImage = processingPath,
+            CallbackUrl = config.CallbackUrl ?? string.Empty
+        };
+
+        var trackedLog = new InterfaceLimsOcrLogEntity
+        {
+            LogId = Guid.NewGuid(),
+            ApiName = "input_ocr",
+            RequestUrl = config.InputOcrUrl,
+            FlowId = payload.FlowId,
+            JobTaskId = payload.JobTaskId,
+            FilePath = processingPath,
+            RequestPayload = JsonSerializer.Serialize(payload),
+            IsSuccess = false,
+            SourceSystem = "worker",
+            WorkStatus = "sending",
+            AttemptCount = 0,
+            IsInterface = false,
+            CreateBy = "worker",
+            CreateDate = DateTime.Now
+        };
+
+        try
+        {
+            workerDbContext.InterfaceLimsOcrLogs.Add(trackedLog);
+            await workerDbContext.SaveChangesAsync(stoppingToken);
+
+            logger.LogInformation(
+                "Claimed inbound file and created sending log. File={File}, FlowId={FlowId}, JobTaskId={JobTaskId}",
+                processingPath,
+                flowId,
+                jobTaskId);
+
+            await SendTrackedJobAsync(client, config, trackedLog, payload, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed after claiming input OCR file. File={File}", processingPath);
+
+            if (workerDbContext.Entry(trackedLog).State != EntityState.Added)
+            {
+                trackedLog.WorkStatus = "send_error";
+                trackedLog.ErrorMessage = ex.Message;
+                trackedLog.CompletedDate = DateTime.Now;
+                trackedLog.FinalPath = TryMoveToFolder(
+                    processingPath,
+                    config.ErrorDirectory,
+                    originalFileName);
+                trackedLog.FilePath = trackedLog.FinalPath;
+                await workerDbContext.SaveChangesAsync(CancellationToken.None);
+            }
+            else
+            {
+                TryMoveToFolder(processingPath, config.ErrorDirectory, originalFileName);
+            }
+        }
+    }
+
+    private async Task RecoverSendingJobsAsync(
+        HttpClient client,
+        LimsOcrConfigApiEntity config,
+        CancellationToken cancellationToken)
+    {
+        var sendingJobs = await workerDbContext.InterfaceLimsOcrLogs
+            .Where(x => x.ApiName == "input_ocr" && x.WorkStatus == "sending")
             .OrderBy(x => x.CreateDate)
             .ToListAsync(cancellationToken);
 
-        if (pendingJobs.Count == 0)
+        foreach (var job in sendingJobs)
         {
-            return;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(job.RequestPayload)
+                || string.IsNullOrWhiteSpace(job.FilePath)
+                || !File.Exists(job.FilePath))
+            {
+                job.WorkStatus = "send_error";
+                job.ErrorMessage = "Unable to recover sending job because payload or source file is missing";
+                job.CompletedDate = DateTime.Now;
+                await workerDbContext.SaveChangesAsync(cancellationToken);
+                continue;
+            }
+
+            InputOcrRequest? payload;
+            try
+            {
+                payload = JsonSerializer.Deserialize<InputOcrRequest>(job.RequestPayload);
+            }
+            catch (JsonException ex)
+            {
+                logger.LogError(ex, "Invalid request payload for sending job {LogId}.", job.LogId);
+                payload = null;
+            }
+
+            if (payload is null)
+            {
+                job.WorkStatus = "send_error";
+                job.ErrorMessage = "Unable to recover sending job because request payload is invalid";
+                job.CompletedDate = DateTime.Now;
+                await workerDbContext.SaveChangesAsync(cancellationToken);
+                continue;
+            }
+
+            logger.LogWarning(
+                "Recovering interrupted OCR send. LogId={LogId}, JobTaskId={JobTaskId}, AttemptCount={AttemptCount}",
+                job.LogId,
+                job.JobTaskId,
+                job.AttemptCount);
+            await SendTrackedJobAsync(client, config, job, payload, cancellationToken);
         }
+    }
+
+    private async Task SendTrackedJobAsync(
+        HttpClient client,
+        LimsOcrConfigApiEntity config,
+        InterfaceLimsOcrLogEntity trackedLog,
+        InputOcrRequest payload,
+        CancellationToken cancellationToken)
+    {
+        var sendResult = await SendWithRetryAsync(client, config, payload, cancellationToken);
+        trackedLog.AttemptCount += sendResult.AttemptCount;
+        trackedLog.ResponseStatusCode = sendResult.StatusCode;
+        trackedLog.ResponsePayload = sendResult.ResponseBody;
+
+        if (sendResult.IsAccepted)
+        {
+            trackedLog.WorkStatus = "submitted";
+            trackedLog.IsSuccess = true;
+            trackedLog.ErrorMessage = null;
+
+            logger.LogInformation(
+                "input_ocr accepted. File stays in processing until callback arrives. JobTaskId={JobTaskId}, Attempts={Attempts}, Status={StatusCode}",
+                payload.JobTaskId,
+                sendResult.AttemptCount,
+                sendResult.StatusCode);
+        }
+        else
+        {
+            var currentPath = trackedLog.FilePath!;
+            var errorPath = TryMoveToFolder(
+                currentPath,
+                config.ErrorDirectory,
+                GetOriginalFileName(currentPath));
+
+            trackedLog.WorkStatus = "send_error";
+            trackedLog.IsSuccess = false;
+            trackedLog.ErrorMessage = sendResult.ErrorMessage;
+            trackedLog.FilePath = errorPath;
+            trackedLog.FinalPath = errorPath;
+            trackedLog.CompletedDate = DateTime.Now;
+
+            logger.LogError(
+                "input_ocr failed after retries. JobTaskId={JobTaskId}, Attempts={Attempts}, Status={StatusCode}, File={File}",
+                payload.JobTaskId,
+                sendResult.AttemptCount,
+                sendResult.StatusCode,
+                errorPath);
+        }
+
+        await workerDbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task<OcrSendResult> SendWithRetryAsync(
+        HttpClient client,
+        LimsOcrConfigApiEntity config,
+        InputOcrRequest payload,
+        CancellationToken cancellationToken)
+    {
+        var maxAttempts = Math.Clamp(config.MaxSendAttempts <= 0 ? 3 : config.MaxSendAttempts, 1, 10);
+        var retryDelaySeconds = Math.Clamp(config.RetryDelaySeconds <= 0 ? 5 : config.RetryDelaySeconds, 1, 60);
+        var timeoutSeconds = Math.Clamp(config.RequestTimeoutSeconds <= 0 ? 60 : config.RequestTimeoutSeconds, 1, 600);
+        int? lastStatusCode = null;
+        string? lastResponseBody = null;
+        string? lastError = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutSource.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                using var response = await client.PostAsJsonAsync(
+                    config.InputOcrUrl,
+                    payload,
+                    timeoutSource.Token);
+                lastStatusCode = (int)response.StatusCode;
+                lastResponseBody = await response.Content.ReadAsStringAsync(timeoutSource.Token);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return new OcrSendResult(
+                        true,
+                        attempt,
+                        lastStatusCode,
+                        lastResponseBody,
+                        null);
+                }
+
+                lastError = $"input_ocr returned HTTP {lastStatusCode}";
+                if (!SharedFilePolicy.IsTransientStatus(response.StatusCode) || attempt == maxAttempts)
+                {
+                    return new OcrSendResult(
+                        false,
+                        attempt,
+                        lastStatusCode,
+                        lastResponseBody,
+                        lastError);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                lastError = $"input_ocr timed out after {timeoutSeconds} seconds";
+            }
+            catch (HttpRequestException ex)
+            {
+                lastError = ex.Message;
+            }
+
+            logger.LogWarning(
+                "Transient input_ocr failure. JobTaskId={JobTaskId}, Attempt={Attempt}/{MaxAttempts}, Error={Error}",
+                payload.JobTaskId,
+                attempt,
+                maxAttempts,
+                lastError);
+
+            if (attempt < maxAttempts)
+            {
+                var delaySeconds = Math.Min(
+                    retryDelaySeconds * (int)Math.Pow(2, attempt - 1),
+                    60);
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+            }
+        }
+
+        return new OcrSendResult(
+            false,
+            maxAttempts,
+            lastStatusCode,
+            lastResponseBody,
+            lastError ?? "input_ocr failed");
+    }
+
+    private async Task FinalizeCompletedJobsAsync(
+        LimsOcrConfigApiEntity config,
+        CancellationToken cancellationToken)
+    {
+        var pendingJobs = await workerDbContext.InterfaceLimsOcrLogs
+            .AsNoTracking()
+            .Where(x => x.ApiName == "input_ocr"
+                && x.WorkStatus == "submitted"
+                && x.JobTaskId != null
+                && x.FilePath != null)
+            .OrderBy(x => x.CreateDate)
+            .ToListAsync(cancellationToken);
 
         foreach (var job in pendingJobs)
         {
@@ -201,10 +411,16 @@ public class Worker(
                 continue;
             }
 
-            var callbackSucceeded = IsCallbackSuccess(callbackLog.RequestPayload);
-            var destinationFolder = callbackSucceeded ? config.SuccessDirectory : config.ErrorDirectory;
-            var destinationPath = MoveToFolder(job.FilePath!, destinationFolder, Path.GetFileName(job.FilePath!));
-
+            var callbackSucceeded = IsCallbackSuccess(
+                callbackLog.RequestPayload,
+                callbackLog.ResponsePayload);
+            var destinationFolder = callbackSucceeded
+                ? config.SuccessDirectory
+                : config.ErrorDirectory;
+            var destinationPath = TryMoveToFolder(
+                job.FilePath!,
+                destinationFolder,
+                GetOriginalFileName(job.FilePath!));
             var trackedLog = await workerDbContext.InterfaceLimsOcrLogs
                 .FirstOrDefaultAsync(x => x.LogId == job.LogId, cancellationToken);
 
@@ -213,19 +429,56 @@ public class Worker(
                 continue;
             }
 
-            trackedLog.WorkStatus = callbackSucceeded ? "completed_success" : "completed_error";
+            trackedLog.WorkStatus = callbackSucceeded
+                ? "completed_success"
+                : "completed_error";
             trackedLog.FinalPath = destinationPath;
             trackedLog.CompletedDate = DateTime.Now;
             trackedLog.IsSuccess = callbackSucceeded;
-            trackedLog.ErrorMessage = callbackSucceeded ? null : "callback returned fail status";
-            trackedLog.ResponseStatusCode = callbackSucceeded ? 200 : 500;
+            trackedLog.IsInterface = callbackSucceeded;
+            trackedLog.ErrorMessage = callbackSucceeded
+                ? null
+                : "callback returned fail or interface was not completed";
+            trackedLog.ResponseStatusCode = callbackLog.ResponseStatusCode;
             trackedLog.ResponsePayload = callbackLog.ResponsePayload;
 
             await workerDbContext.SaveChangesAsync(cancellationToken);
         }
     }
 
-    private static bool IsCallbackSuccess(string? requestPayload)
+    internal static bool IsCallbackSuccess(string? requestPayload, string? responsePayload)
+    {
+        if (!HasReadyToCheckResult(requestPayload))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(responsePayload))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var response = JsonDocument.Parse(responsePayload);
+            if (response.RootElement.TryGetProperty("data", out var data)
+                && data.TryGetProperty("interface_status", out var interfaceStatus))
+            {
+                return string.Equals(
+                    interfaceStatus.GetString(),
+                    "completed",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasReadyToCheckResult(string? requestPayload)
     {
         if (string.IsNullOrWhiteSpace(requestPayload))
         {
@@ -235,83 +488,37 @@ public class Worker(
         try
         {
             using var document = JsonDocument.Parse(requestPayload);
-            if (!document.RootElement.TryGetProperty("ocr_result", out var ocrResult) || ocrResult.ValueKind != JsonValueKind.Array)
+            if (!document.RootElement.TryGetProperty("ocr_result", out var ocrResult)
+                || ocrResult.ValueKind != JsonValueKind.Array)
             {
                 return false;
             }
 
+            var readyToCheck = false;
             foreach (var page in ocrResult.EnumerateArray())
             {
-                if (!page.TryGetProperty("tracking_status", out var trackingStatusElement))
+                if (!page.TryGetProperty("tracking_status", out var statusElement))
                 {
                     continue;
                 }
 
-                var trackingStatus = trackingStatusElement.GetString();
-                if (string.Equals(trackingStatus, "fail", StringComparison.OrdinalIgnoreCase))
+                var status = statusElement.GetString();
+                if (string.Equals(status, "fail", StringComparison.OrdinalIgnoreCase))
                 {
                     return false;
                 }
 
-                if (string.Equals(trackingStatus, "ReadyToCheck", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                readyToCheck |= string.Equals(
+                    status,
+                    "ReadyToCheck",
+                    StringComparison.OrdinalIgnoreCase);
             }
 
-            return false;
+            return readyToCheck;
         }
         catch (JsonException)
         {
             return false;
-        }
-    }
-
-    private async Task WriteInterfaceLogAsync(
-        string apiName,
-        string? requestUrl,
-        string? flowId,
-        string? jobTaskId,
-        string? filePath,
-        string? requestPayload,
-        int? responseStatusCode,
-        string? responsePayload,
-        bool isSuccess,
-        string? errorMessage,
-        string workStatus,
-        string? finalPath,
-        DateTime? completedDate,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            workerDbContext.InterfaceLimsOcrLogs.Add(new InterfaceLimsOcrLogEntity
-            {
-                LogId = Guid.NewGuid(),
-                ApiName = apiName,
-                RequestUrl = requestUrl,
-                FlowId = flowId,
-                JobTaskId = jobTaskId,
-                FilePath = filePath,
-                RequestPayload = requestPayload,
-                ResponseStatusCode = responseStatusCode,
-                ResponsePayload = responsePayload,
-                IsSuccess = isSuccess,
-                ErrorMessage = errorMessage,
-                SourceSystem = "worker",
-                WorkStatus = workStatus,
-                FinalPath = finalPath,
-                CompletedDate = completedDate,
-                IsInterface = false,
-                CreateBy = "worker",
-                CreateDate = DateTime.Now
-            });
-
-            await workerDbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to write interface log.");
         }
     }
 
@@ -323,28 +530,105 @@ public class Worker(
         Directory.CreateDirectory(config.ErrorDirectory);
     }
 
-    private static bool IsFileReady(string filePath)
+    private static string MoveToFolder(
+        string sourcePath,
+        string destinationFolder,
+        string originalFileName)
+    {
+        Directory.CreateDirectory(destinationFolder);
+        var destinationPath = Path.Combine(
+            destinationFolder,
+            $"{DateTime.UtcNow:yyyyMMddHHmmssfff}_{Guid.NewGuid():N}_{originalFileName}");
+
+        File.Move(sourcePath, destinationPath, overwrite: false);
+        return destinationPath;
+    }
+
+    private string TryMoveToFolder(
+        string sourcePath,
+        string destinationFolder,
+        string originalFileName)
+    {
+        if (!File.Exists(sourcePath))
+        {
+            return sourcePath;
+        }
+
+        try
+        {
+            return MoveToFolder(sourcePath, destinationFolder, originalFileName);
+        }
+        catch (IOException ex)
+        {
+            logger.LogError(
+                ex,
+                "Unable to move file. Source={Source}, Destination={Destination}",
+                sourcePath,
+                destinationFolder);
+            return sourcePath;
+        }
+    }
+
+    private static string GetOriginalFileName(string filePath)
+    {
+        var fileName = Path.GetFileName(filePath);
+        const int workerPrefixLength = 51;
+
+        return fileName.Length > workerPrefixLength
+            && fileName[17] == '_'
+            && fileName[50] == '_'
+                ? fileName[workerPrefixLength..]
+                : fileName;
+    }
+
+    private sealed record OcrSendResult(
+        bool IsAccepted,
+        int AttemptCount,
+        int? StatusCode,
+        string? ResponseBody,
+        string? ErrorMessage);
+}
+
+public static class SharedFilePolicy
+{
+    public static bool IsReady(string filePath, int stableSeconds, DateTime utcNow)
     {
         try
         {
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.None);
-            return stream.Length >= 0;
+            var fileInfo = new FileInfo(filePath);
+            if (!fileInfo.Exists || fileInfo.Length <= 0)
+            {
+                return false;
+            }
+
+            var requiredAge = TimeSpan.FromSeconds(Math.Clamp(stableSeconds, 0, 300));
+            if (utcNow - fileInfo.LastWriteTimeUtc < requiredAge)
+            {
+                return false;
+            }
+
+            using var stream = new FileStream(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None);
+            return stream.Length == fileInfo.Length;
         }
         catch (IOException)
         {
             return false;
         }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
-    private static string MoveToFolder(string sourcePath, string destinationFolder, string originalFileName)
+    public static bool IsTransientStatus(HttpStatusCode statusCode)
     {
-        Directory.CreateDirectory(destinationFolder);
-
-        var destinationPath = Path.Combine(
-            destinationFolder,
-            $"{DateTime.UtcNow:yyyyMMddHHmmssfff}_{Guid.NewGuid():N}_{originalFileName}");
-
-        File.Move(sourcePath, destinationPath, true);
-        return destinationPath;
+        var value = (int)statusCode;
+        return statusCode is HttpStatusCode.RequestTimeout
+            or HttpStatusCode.TooManyRequests
+            || value >= 500;
     }
 }

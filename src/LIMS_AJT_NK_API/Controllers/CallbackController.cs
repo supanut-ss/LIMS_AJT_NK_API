@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LIMS_AJT_NK_API.Data;
 using LIMS_AJT_NK_API.Models;
 using LIMS_AJT_NK_API.Services;
@@ -223,27 +224,52 @@ public class CallbackController(
             CreateDate = now
         };
 
-        foreach (var page in request.OcrResult)
+        var assignedPageIds = request.OcrResult
+            .Where(x => x.PageId.GetValueOrDefault() > 0)
+            .Select(x => x.PageId!.Value)
+            .ToHashSet();
+        var nextGeneratedPageId = 1;
+
+        for (var pageIndex = 0; pageIndex < request.OcrResult.Count; pageIndex++)
         {
+            var page = request.OcrResult[pageIndex];
             var body = page.BodyJson;
+            var quantity = ParseQuantity(body?.Quantity);
+            var storedPageId = page.PageId.GetValueOrDefault();
+            if (storedPageId <= 0)
+            {
+                while (assignedPageIds.Contains(nextGeneratedPageId))
+                {
+                    nextGeneratedPageId++;
+                }
+
+                storedPageId = nextGeneratedPageId++;
+                assignedPageIds.Add(storedPageId);
+            }
+
             var result = new InterfaceLimsOcrResultEntity
             {
                 ResultId = Guid.NewGuid(),
                 Callback = callback,
                 IsInterface = false,
-                PageId = page.PageId,
+                PageId = storedPageId,
+                FileId = NormalizeOptional(page.FileId),
                 TrackingId = page.TrackingId,
                 TrackingStatus = page.TrackingStatus!.Trim(),
                 ProductName = body?.ProductName,
                 DocumentType = body?.DocumentType,
                 SupplierName = body?.SupplierName,
-                LotNumber = body?.LotNumber,
+                LotNumber = FirstNotEmpty(body?.LotNumber, body?.InternalLot),
                 OriginSupplierName = body?.OriginSupplierName,
                 OriginProductName = body?.OriginProductName,
                 ExpiryDate = ParseDate(body?.ExpiryDate),
                 MfgDate = ParseDate(body?.MfgDate),
                 InternalLot = body?.InternalLot,
-                Quantity = ParseDecimal(body?.Quantity),
+                Quantity = quantity.Value,
+                QuantityUom = quantity.Uom,
+                ConfidenceJson = page.Confident.HasValue
+                    ? JsonSerializer.Serialize(page.Confident.Value)
+                    : null,
                 CreateBy = "api",
                 CreateDate = now
             };
@@ -276,11 +302,17 @@ public class CallbackController(
 
     private static (string Field, string Message)? ValidateResults(IEnumerable<OcrResultRequest> results)
     {
+        var pageIds = new HashSet<int>();
         foreach (var page in results)
         {
-            if (page.PageId <= 0)
+            if (page.PageId.GetValueOrDefault() <= 0 && string.IsNullOrWhiteSpace(page.FileId))
             {
-                return ("page_id", "Value must be greater than zero");
+                return ("page_id/file_id", "Either page_id greater than zero or file_id is required");
+            }
+
+            if (page.PageId.GetValueOrDefault() > 0 && !pageIds.Add(page.PageId!.Value))
+            {
+                return ("page_id", "Value must be unique within ocr_result");
             }
 
             if (string.IsNullOrWhiteSpace(page.TrackingStatus))
@@ -325,15 +357,38 @@ public class CallbackController(
             : null;
     }
 
-    private static decimal? ParseDecimal(string? value)
+    private static (decimal? Value, string? Uom) ParseQuantity(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return null;
+            return (null, null);
         }
 
-        return decimal.TryParse(value.Trim(), NumberStyles.Number, CultureInfo.InvariantCulture, out var quantity)
-            ? quantity
-            : null;
+        var match = Regex.Match(
+            value,
+            @"^\s*(?<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?<uom>.*?)\s*$",
+            RegexOptions.CultureInvariant);
+
+        if (!match.Success ||
+            !decimal.TryParse(
+                match.Groups["number"].Value,
+                NumberStyles.Number,
+                CultureInfo.InvariantCulture,
+                out var quantity))
+        {
+            return (null, null);
+        }
+
+        return (quantity, NormalizeOptional(match.Groups["uom"].Value));
+    }
+
+    private static string? FirstNotEmpty(string? primary, string? fallback)
+    {
+        return NormalizeOptional(primary) ?? NormalizeOptional(fallback);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 }

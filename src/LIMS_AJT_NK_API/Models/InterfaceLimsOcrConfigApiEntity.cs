@@ -10,8 +10,15 @@ public class InterfaceLimsOcrConfigApiEntity
     public string ProcessingDirectory { get; set; } = string.Empty;
     public string SuccessDirectory { get; set; } = string.Empty;
     public string ErrorDirectory { get; set; } = string.Empty;
+    public string? DocumentHostDirectory { get; set; }
+    public string? DocumentWebPath { get; set; }
+    public string? DocumentGroup { get; set; }
     public string? FlowId { get; set; }
     public int IntervalSeconds { get; set; }
+    public int FileStableSeconds { get; set; }
+    public int MaxSendAttempts { get; set; }
+    public int RetryDelaySeconds { get; set; }
+    public int RequestTimeoutSeconds { get; set; }
     public bool IsInterface { get; set; }
     public string? CreateBy { get; set; }
     public DateTime CreateDate { get; set; }

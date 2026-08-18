@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace LIMS_AJT_NK_CallbackWorker.Models;
@@ -14,7 +15,10 @@ public class CallbackRequest
 public class OcrResult
 {
     [JsonPropertyName("page_id")]
-    public int PageId { get; set; }
+    public int? PageId { get; set; }
+
+    [JsonPropertyName("file_id")]
+    public string? FileId { get; set; }
 
     [JsonPropertyName("tracking_id")]
     public string? TrackingId { get; set; }
@@ -24,6 +28,9 @@ public class OcrResult
 
     [JsonPropertyName("body_json")]
     public OcrBodyJson BodyJson { get; set; } = new();
+
+    [JsonPropertyName("confident")]
+    public JsonElement? Confident { get; set; }
 }
 
 public class OcrBodyJson

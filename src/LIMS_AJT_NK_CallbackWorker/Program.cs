@@ -3,6 +3,10 @@ using LIMS_AJT_NK_CallbackWorker.Data;
 using Microsoft.EntityFrameworkCore;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddWindowsService(options =>
+{
+    options.ServiceName = "LIMS AJT NK OCR Worker";
+});
 builder.Services.AddDbContext<WorkerDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddHttpClient();

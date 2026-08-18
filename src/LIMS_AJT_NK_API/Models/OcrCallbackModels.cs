@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace LIMS_AJT_NK_API.Models;
@@ -17,7 +18,10 @@ public class OcrCallbackRequest
 public class OcrResultRequest
 {
     [JsonPropertyName("page_id")]
-    public int PageId { get; set; }
+    public int? PageId { get; set; }
+
+    [JsonPropertyName("file_id")]
+    public string? FileId { get; set; }
 
     [JsonPropertyName("tracking_id")]
     public string? TrackingId { get; set; }
@@ -27,6 +31,9 @@ public class OcrResultRequest
 
     [JsonPropertyName("body_json")]
     public OcrBodyJsonRequest? BodyJson { get; set; }
+
+    [JsonPropertyName("confident")]
+    public JsonElement? Confident { get; set; }
 }
 
 public class OcrBodyJsonRequest
@@ -96,6 +103,7 @@ public class InterfaceLimsOcrResultEntity
     public bool IsInterface { get; set; }
 
     public int PageId { get; set; }
+    public string? FileId { get; set; }
     public string? TrackingId { get; set; }
     public string TrackingStatus { get; set; } = string.Empty;
 
@@ -109,6 +117,8 @@ public class InterfaceLimsOcrResultEntity
     public DateTime? MfgDate { get; set; }
     public string? InternalLot { get; set; }
     public decimal? Quantity { get; set; }
+    public string? QuantityUom { get; set; }
+    public string? ConfidenceJson { get; set; }
 
     public string? CreateBy { get; set; }
     public DateTime CreateDate { get; set; }

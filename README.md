@@ -36,6 +36,7 @@ dotnet build .\src\LIMS_AJT_NK_CallbackWorker\LIMS_AJT_NK_CallbackWorker.csproj
   - `t_interface_lims_ocr_callback`
   - `t_interface_lims_ocr_result`
   - `t_interface_lims_ocr_result_item`
+  - `t_lims_documents` เมื่อกำหนด Host document directory แล้ว
 
 รายละเอียดการจับคู่และ response: [OCR Callback QAQC](docs/OCR_CALLBACK_QAQC.md)
 
@@ -44,3 +45,30 @@ dotnet build .\src\LIMS_AJT_NK_CallbackWorker\LIMS_AJT_NK_CallbackWorker.csproj
 ```powershell
 dotnet test .\tests\LIMS_AJT_NK_API.Tests\LIMS_AJT_NK_API.Tests.csproj
 ```
+
+ก่อน deploy callback contract รุ่นที่รองรับ `file_id` ให้รัน migration
+`database\20260818_align_ocr_callback_payload_schema.sql` กับฐานข้อมูลเป้าหมาย
+
+จากนั้นกำหนดตำแหน่ง `_Documents` จริงบน Host ให้ config row ที่ใช้งาน เช่น:
+
+```sql
+DECLARE @config_id UNIQUEIDENTIFIER =
+(
+    SELECT TOP (1) config_id
+    FROM dbo.t_interface_lims_ocr_config_api
+    ORDER BY create_date DESC
+);
+
+UPDATE dbo.t_interface_lims_ocr_config_api
+SET document_host_directory = N'D:\LIMS\WMS_NEW\_Documents',
+    document_web_path = N'../_Documents',
+    document_group = N'QC_COA'
+WHERE config_id = @config_id;
+```
+
+Service account ของ API ต้องมีสิทธิ์อ่านไฟล์ใน `processing_directory` และเขียนไฟล์
+ใน `document_host_directory` โดย `document_group` เลือกได้ระหว่างกลุ่มที่ระบบ LIMS
+ใช้งาน เช่น `QC_COA` หรือ `QA_COA`
+
+การตั้ง shared path, retry และติดตั้ง Worker เป็น Windows Service ดูที่
+[Callback Worker](src/LIMS_AJT_NK_CallbackWorker/README.md)

@@ -10,13 +10,29 @@ Endpoint `POST /api/call_back` จะบันทึก raw callback ก่อ�
 
 - `product_name` ตรงกับ `t_wms_item.description`
 - `Supplier_name` ตรงกับ `t_lims_inbound_receive.supplier_name`
-- `lot_number` ตรงกับ `t_lims_inbound_receive.lot_number`
+- `lot_number` ตรงกับ `t_lims_inbound_receive.lot_number`; ถ้า OCR ส่งเป็นค่าว่าง
+  ระบบจะใช้ `Internal_lot` แทน
 - `mfg_date` ตรงกับ `t_lims_inbound_receive.mfg_date`
 
 หลังจากนั้นต้องพบ `t_lims_qaqc_scan` หนึ่งรายการ และ parameter ต้องผ่าน active
 mapping ใน `t_lims_coa_parameter_mapping` ก่อนอัปเดต
 `t_lims_qaqc_coa_parameter_test` พร้อมสร้าง audit ใน
 `t_lims_qaqc_coa_parameter_transaction`
+
+## การจัดเก็บไฟล์ COA
+
+เมื่อจับคู่ inbound ได้ ระบบจะใช้ `job_task_id` หา source PDF จาก log ของ
+`input_ocr` แล้วทำงานดังนี้:
+
+1. Copy PDF จาก processing path ไปที่
+   `{document_host_directory}/{document_group}`
+2. เพิ่มข้อมูลใน `t_lims_documents` โดยใช้ `pk_id = receipt_detail_id`
+3. เก็บ `job_task_id`, `callback_id` และ `file_id/tracking_id` ใน `udf1-udf3`
+4. ใช้ `pk_id + document_group + job_task_id` ตรวจ callback ซ้ำ
+
+หากยังไม่กำหนด `document_host_directory` การ interface parameter ยังทำงานตามปกติ
+และ response จะแสดง `document_status = not_configured` หากกำหนด directory แล้ว
+แต่หา/copy source file ไม่ได้ ระบบจะ rollback การ interface และตอบ HTTP 500
 
 ## Response example
 
@@ -37,6 +53,9 @@ mapping ใน `t_lims_coa_parameter_mapping` ก่อนอัปเดต
         "page_id": 1,
         "receipt_detail_id": "f835b76a-60c6-4ab3-abdb-e7355e2aa66a",
         "status": "partial",
+        "document_status": "stored",
+        "document_id": 12345,
+        "document_path": "../_Documents/QC_COA/f835b76a60c64ab3abdb7355e2aa66a_20260818103000123_aabbccdd.pdf",
         "updated_item_count": 1,
         "skipped_item_count": 1,
         "items": [
@@ -68,3 +87,7 @@ mapping ใน `t_lims_coa_parameter_mapping` ก่อนอัปเดต
 กรณี business matching ไม่สำเร็จ API จะเก็บ raw callback และตอบ HTTP 200 พร้อม
 เหตุผลรายหน้า/parameter หากเกิด database error ระหว่างเขียน QAQC จะ rollback
 เฉพาะส่วน QAQC และตอบ HTTP 500 โดย raw callback ยังคงอยู่
+
+Payload รองรับทั้ง `page_id` แบบเดิมและ `file_id` จาก Aji OCR หากมีเฉพาะ
+`file_id` ระบบจะกำหนด `page_id` ตามลำดับรายการเพื่อใช้เป็น key ภายใน และเก็บ
+`file_id`, quantity/UOM และ `confident` แยกไว้ใน callback result

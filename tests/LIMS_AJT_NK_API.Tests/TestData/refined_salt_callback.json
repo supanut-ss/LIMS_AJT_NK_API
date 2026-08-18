@@ -1,0 +1,128 @@
+{
+	"job_task_id": "job_20260817_104401",
+	"ocr_result": [
+		{
+			"file_id": "6a8283ddb3b7d074da97e8f1",
+			"tracking_id": "85cb5908a421b66d63972d4dfaf89f77",
+			"tracking_status": "ReadyToCheck",
+			"body_json": {
+				"document_type": "CERTIFICATE OF ANALYSIS",
+				"product_name": "Refined salt 50 kg.",
+				"origin_product_name": "IODIZED DRIED REFINED SALT",
+				"Internal_lot": "26KC052501",
+				"quantity": "94000 kg",
+				"Supplier_name": "K.C. Salt International Co.,Ltd",
+				"origin_supplier_name": "THAI REFINED SALT CO., LTD.",
+				"lot_number": null,
+				"mfg_date": "08/05/2026",
+				"expiry_date": "08/05/2029",
+				"body_item": [
+					{
+						"parameter_name": "APPEARANCE",
+						"result": "WHITE CRYSTAL",
+						"uom": null
+					},
+					{
+						"parameter_name": "CALCIUM",
+						"result": "5.41",
+						"uom": "mg/kg"
+					},
+					{
+						"parameter_name": "MAGNESIUM",
+						"result": "0.82",
+						"uom": "mg/kg"
+					},
+					{
+						"parameter_name": "SULFATE",
+						"result": "243.17",
+						"uom": "mg/kg"
+					},
+					{
+						"parameter_name": "FERROCYANIDE",
+						"result": "2.94",
+						"uom": "mg/kg"
+					},
+					{
+						"parameter_name": "IRON",
+						"result": "1.24",
+						"uom": "mg/kg"
+					},
+					{
+						"parameter_name": "MOISTURE",
+						"result": "0.02",
+						"uom": "%w/w"
+					},
+					{
+						"parameter_name": "SODIUM CHLORIDE",
+						"result": "99.96",
+						"uom": "%w/w"
+					},
+					{
+						"parameter_name": "IODINE",
+						"result": "31.87",
+						"uom": "mg/kg"
+					}
+				]
+			},
+			"confident": {
+				"document_type": 1,
+				"product_name": 0.8824,
+				"origin_product_name": 0.8,
+				"Internal_lot": 1,
+				"quantity": 0.8,
+				"Supplier_name": 0.9247,
+				"origin_supplier_name": 0.8,
+				"lot_number": -1,
+				"mfg_date": 1,
+				"expiry_date": 1,
+				"body_item": [
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": -1
+					},
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": 0.9
+					},
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": 0.9
+					},
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": 0.9
+					},
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": 0.9
+					},
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": 0.9
+					},
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": 0.9
+					},
+					{
+						"parameter_name": 1,
+						"result": 1,
+						"uom": 0.9
+					},
+					{
+						"parameter_name": 0.8,
+						"result": 1,
+						"uom": 0.9
+					}
+				]
+			}
+		}
+	]
+}

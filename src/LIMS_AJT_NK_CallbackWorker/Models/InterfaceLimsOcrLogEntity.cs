@@ -15,6 +15,7 @@ public class InterfaceLimsOcrLogEntity
     public string? ErrorMessage { get; set; }
     public string? SourceSystem { get; set; }
     public string WorkStatus { get; set; } = "submitted";
+    public int AttemptCount { get; set; }
     public string? FinalPath { get; set; }
     public DateTime? CompletedDate { get; set; }
     public bool IsInterface { get; set; }
