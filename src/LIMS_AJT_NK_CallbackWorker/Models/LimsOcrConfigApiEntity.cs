@@ -5,6 +5,9 @@ public class LimsOcrConfigApiEntity
     public Guid ConfigId { get; set; }
     public bool IsEnabled { get; set; }
     public string InputOcrUrl { get; set; } = string.Empty;
+    public string? InputOcrFileUrl { get; set; }
+    public string SubmissionMode { get; set; } = OcrSubmissionPolicy.PathSubmissionMode;
+    public string InputOcrFileFieldName { get; set; } = "file";
     public string? CallbackUrl { get; set; }
     public string InboundDirectory { get; set; } = string.Empty;
     public string ProcessingDirectory { get; set; } = string.Empty;

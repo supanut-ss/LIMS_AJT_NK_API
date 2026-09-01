@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using System.Text.Json;
 using LIMS_AJT_NK_CallbackWorker.Data;
 using LIMS_AJT_NK_CallbackWorker.Models;
@@ -123,6 +122,8 @@ public class Worker(
         CancellationToken stoppingToken)
     {
         var originalFileName = Path.GetFileName(inboundFile);
+        var apiName = OcrSubmissionPolicy.ResolveApiName(config.SubmissionMode);
+        var requestUrl = OcrSubmissionPolicy.ResolveEndpoint(config, apiName);
         var processingPath = MoveToFolder(
             inboundFile,
             config.ProcessingDirectory,
@@ -142,8 +143,8 @@ public class Worker(
         var trackedLog = new InterfaceLimsOcrLogEntity
         {
             LogId = Guid.NewGuid(),
-            ApiName = "input_ocr",
-            RequestUrl = config.InputOcrUrl,
+            ApiName = apiName,
+            RequestUrl = requestUrl,
             FlowId = payload.FlowId,
             JobTaskId = payload.JobTaskId,
             FilePath = processingPath,
@@ -163,7 +164,8 @@ public class Worker(
             await workerDbContext.SaveChangesAsync(stoppingToken);
 
             logger.LogInformation(
-                "Claimed inbound file and created sending log. File={File}, FlowId={FlowId}, JobTaskId={JobTaskId}",
+                "Claimed inbound file and created {ApiName} sending log. File={File}, FlowId={FlowId}, JobTaskId={JobTaskId}",
+                apiName,
                 processingPath,
                 flowId,
                 jobTaskId);
@@ -203,7 +205,9 @@ public class Worker(
         CancellationToken cancellationToken)
     {
         var sendingJobs = await workerDbContext.InterfaceLimsOcrLogs
-            .Where(x => x.ApiName == "input_ocr" && x.WorkStatus == "sending")
+            .Where(x => (x.ApiName == OcrSubmissionPolicy.InputOcrApiName
+                    || x.ApiName == OcrSubmissionPolicy.InputOcrFileApiName)
+                && x.WorkStatus == "sending")
             .OrderBy(x => x.CreateDate)
             .ToListAsync(cancellationToken);
 
@@ -258,7 +262,19 @@ public class Worker(
         InputOcrRequest payload,
         CancellationToken cancellationToken)
     {
-        var sendResult = await SendWithRetryAsync(client, config, payload, cancellationToken);
+        var apiName = trackedLog.ApiName;
+        var requestUrl = OcrSubmissionPolicy.ResolveRequestUrl(
+            config,
+            apiName,
+            trackedLog.RequestUrl);
+        var sendResult = await SendWithRetryAsync(
+            client,
+            config,
+            apiName,
+            requestUrl,
+            trackedLog.FilePath!,
+            payload,
+            cancellationToken);
         trackedLog.AttemptCount += sendResult.AttemptCount;
         trackedLog.ResponseStatusCode = sendResult.StatusCode;
         trackedLog.ResponsePayload = sendResult.ResponseBody;
@@ -270,7 +286,8 @@ public class Worker(
             trackedLog.ErrorMessage = null;
 
             logger.LogInformation(
-                "input_ocr accepted. File stays in processing until callback arrives. JobTaskId={JobTaskId}, Attempts={Attempts}, Status={StatusCode}",
+                "{ApiName} accepted. File stays in processing until callback arrives. JobTaskId={JobTaskId}, Attempts={Attempts}, Status={StatusCode}",
+                apiName,
                 payload.JobTaskId,
                 sendResult.AttemptCount,
                 sendResult.StatusCode);
@@ -291,7 +308,8 @@ public class Worker(
             trackedLog.CompletedDate = DateTime.Now;
 
             logger.LogError(
-                "input_ocr failed after retries. JobTaskId={JobTaskId}, Attempts={Attempts}, Status={StatusCode}, File={File}",
+                "{ApiName} failed after retries. JobTaskId={JobTaskId}, Attempts={Attempts}, Status={StatusCode}, File={File}",
+                apiName,
                 payload.JobTaskId,
                 sendResult.AttemptCount,
                 sendResult.StatusCode,
@@ -304,6 +322,9 @@ public class Worker(
     private async Task<OcrSendResult> SendWithRetryAsync(
         HttpClient client,
         LimsOcrConfigApiEntity config,
+        string apiName,
+        string requestUrl,
+        string filePath,
         InputOcrRequest payload,
         CancellationToken cancellationToken)
     {
@@ -320,10 +341,12 @@ public class Worker(
             {
                 using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutSource.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-                using var response = await client.PostAsJsonAsync(
-                    config.InputOcrUrl,
+                using var content = OcrSubmissionPolicy.CreateContent(
+                    apiName,
                     payload,
-                    timeoutSource.Token);
+                    filePath,
+                    config.InputOcrFileFieldName);
+                using var response = await client.PostAsync(requestUrl, content, timeoutSource.Token);
                 lastStatusCode = (int)response.StatusCode;
                 lastResponseBody = await response.Content.ReadAsStringAsync(timeoutSource.Token);
 
@@ -337,7 +360,7 @@ public class Worker(
                         null);
                 }
 
-                lastError = $"input_ocr returned HTTP {lastStatusCode}";
+                lastError = $"{apiName} returned HTTP {lastStatusCode}";
                 if (!SharedFilePolicy.IsTransientStatus(response.StatusCode) || attempt == maxAttempts)
                 {
                     return new OcrSendResult(
@@ -354,7 +377,7 @@ public class Worker(
             }
             catch (OperationCanceledException)
             {
-                lastError = $"input_ocr timed out after {timeoutSeconds} seconds";
+                lastError = $"{apiName} timed out after {timeoutSeconds} seconds";
             }
             catch (HttpRequestException ex)
             {
@@ -362,7 +385,8 @@ public class Worker(
             }
 
             logger.LogWarning(
-                "Transient input_ocr failure. JobTaskId={JobTaskId}, Attempt={Attempt}/{MaxAttempts}, Error={Error}",
+                "Transient {ApiName} failure. JobTaskId={JobTaskId}, Attempt={Attempt}/{MaxAttempts}, Error={Error}",
+                apiName,
                 payload.JobTaskId,
                 attempt,
                 maxAttempts,
@@ -382,7 +406,7 @@ public class Worker(
             maxAttempts,
             lastStatusCode,
             lastResponseBody,
-            lastError ?? "input_ocr failed");
+            lastError ?? $"{apiName} failed");
     }
 
     private async Task FinalizeCompletedJobsAsync(
@@ -391,7 +415,8 @@ public class Worker(
     {
         var pendingJobs = await workerDbContext.InterfaceLimsOcrLogs
             .AsNoTracking()
-            .Where(x => x.ApiName == "input_ocr"
+            .Where(x => (x.ApiName == OcrSubmissionPolicy.InputOcrApiName
+                    || x.ApiName == OcrSubmissionPolicy.InputOcrFileApiName)
                 && x.WorkStatus == "submitted"
                 && x.JobTaskId != null
                 && x.FilePath != null)
@@ -571,14 +596,7 @@ public class Worker(
 
     private static string GetOriginalFileName(string filePath)
     {
-        var fileName = Path.GetFileName(filePath);
-        const int workerPrefixLength = 51;
-
-        return fileName.Length > workerPrefixLength
-            && fileName[17] == '_'
-            && fileName[50] == '_'
-                ? fileName[workerPrefixLength..]
-                : fileName;
+        return OcrSubmissionPolicy.GetOriginalFileName(filePath);
     }
 
     private sealed record OcrSendResult(

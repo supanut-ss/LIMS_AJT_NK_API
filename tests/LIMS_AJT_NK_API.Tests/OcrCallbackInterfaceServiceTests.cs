@@ -32,6 +32,7 @@ public class OcrCallbackInterfaceServiceTests
         Assert.Equal("api", test.UpdateBy);
         Assert.NotNull(test.UpdateDate);
         Assert.Equal("OCR Callback", transaction.LogType);
+        Assert.Equal(callback.Results.Single().Items.Single().ItemId, transaction.TranId);
         Assert.Equal("49.2", transaction.Result);
         Assert.Equal(scenario.ReceiptDetailId, transaction.ReceiptDetailId);
         Assert.Equal("api", transaction.TransationBy);
@@ -129,6 +130,13 @@ public class OcrCallbackInterfaceServiceTests
         Assert.False(callback.IsInterface);
         Assert.False(callback.Results.Single().IsInterface);
         Assert.Single(callback.Results.Single().Items, x => x.IsInterface);
+
+        var replay = await CreateService(database.Context).ProcessAsync(scenario.CallbackId);
+        Assert.True(replay.IsReplay);
+        Assert.Equal(OcrInterfaceStatuses.Partial, replay.InterfaceStatus);
+        Assert.Equal(1, replay.UpdatedItemCount);
+        Assert.Equal(1, replay.SkippedItemCount);
+        Assert.Single(await database.Context.LimsQaqcCoaParameterTransactions.ToListAsync());
     }
 
     [Fact]
@@ -188,10 +196,15 @@ public class OcrCallbackInterfaceServiceTests
         Assert.Equal("ignored", summary.Pages.Single().Status);
         Assert.Equal(0, summary.UpdatedItemCount);
         Assert.Empty(database.Context.LimsQaqcCoaParameterTransactions);
+
+        var replay = await CreateService(database.Context).ProcessAsync(scenario.CallbackId);
+        Assert.True(replay.IsReplay);
+        Assert.Equal(OcrInterfaceStatuses.NotMatched, replay.InterfaceStatus);
+        Assert.Empty(database.Context.LimsQaqcCoaParameterTransactions);
     }
 
     [Fact]
-    public async Task ProcessAsync_ProcessesCallbacksWithTheSameJobTaskIdEveryTime()
+    public async Task ProcessAsync_ProcessesDistinctLegacyCallbacksWithoutIdempotencyKeys()
     {
         await using var database = await TestDatabase.CreateAsync();
         var first = await SeedScenarioAsync(database.Context, jobTaskId: "duplicate-job");
@@ -201,13 +214,16 @@ public class OcrCallbackInterfaceServiceTests
         var firstSummary = await service.ProcessAsync(first.CallbackId);
         var secondSummary = await service.ProcessAsync(secondCallbackId);
 
+        Assert.All(
+            await database.Context.InterfaceLimsOcrCallbacks.ToListAsync(),
+            x => Assert.Null(x.IdempotencyKey));
         Assert.Equal(OcrInterfaceStatuses.Completed, firstSummary.InterfaceStatus);
         Assert.Equal(OcrInterfaceStatuses.Completed, secondSummary.InterfaceStatus);
         Assert.Equal(2, await database.Context.LimsQaqcCoaParameterTransactions.CountAsync());
     }
 
     [Fact]
-    public async Task ProcessAsync_ResetsInterfaceFlags_WhenCallbackIsReprocessedAndNoLongerMatches()
+    public async Task ProcessAsync_ReplaysTerminalSummaryWithoutResettingFlagsOrWritingAnotherAudit()
     {
         await using var database = await TestDatabase.CreateAsync();
         var scenario = await SeedScenarioAsync(database.Context);
@@ -222,16 +238,68 @@ public class OcrCallbackInterfaceServiceTests
 
         var secondSummary = await service.ProcessAsync(scenario.CallbackId);
 
-        Assert.Equal(OcrInterfaceStatuses.NotMatched, secondSummary.InterfaceStatus);
+        Assert.Equal(OcrInterfaceStatuses.Completed, secondSummary.InterfaceStatus);
+        Assert.True(secondSummary.IsReplay);
+        Assert.Equal(firstSummary.UpdatedItemCount, secondSummary.UpdatedItemCount);
         database.Context.ChangeTracker.Clear();
         var callback = await database.Context.InterfaceLimsOcrCallbacks
             .Include(x => x.Results)
             .ThenInclude(x => x.Items)
             .SingleAsync();
-        Assert.False(callback.IsInterface);
-        Assert.False(callback.Results.Single().IsInterface);
-        Assert.False(callback.Results.Single().Items.Single().IsInterface);
+        Assert.True(callback.IsInterface);
+        Assert.True(callback.Results.Single().IsInterface);
+        Assert.True(callback.Results.Single().Items.Single().IsInterface);
         Assert.Single(await database.Context.LimsQaqcCoaParameterTransactions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ReportsPartial_WhenPreservedItemIsProcessedAndAnotherIsSkipped()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var scenario = await SeedScenarioAsync(database.Context, includeUnmappedItem: true);
+        var processedItem = await database.Context.InterfaceLimsOcrResultItems
+            .SingleAsync(x => x.Seq == 1);
+        processedItem.IsInterface = true;
+        await database.Context.SaveChangesAsync();
+
+        var summary = await CreateService(database.Context).ProcessAsync(scenario.CallbackId);
+
+        Assert.Equal(OcrInterfaceStatuses.Partial, summary.InterfaceStatus);
+        Assert.Equal(0, summary.UpdatedItemCount);
+        Assert.Equal(1, summary.AlreadyProcessedItemCount);
+        Assert.Equal(1, summary.SkippedItemCount);
+        Assert.Empty(await database.Context.LimsQaqcCoaParameterTransactions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_SerializesConcurrentProcessorsAndWritesOneAudit()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var scenario = await SeedScenarioAsync(database.Context);
+        database.Context.ChangeTracker.Clear();
+        await using var firstContext = database.CreateContext();
+        await using var secondContext = database.CreateContext();
+        var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<OcrCallbackInterfaceSummary> ProcessAsync(ApplicationDbContext context)
+        {
+            await start.Task;
+            return await CreateService(context).ProcessAsync(scenario.CallbackId);
+        }
+
+        var firstTask = ProcessAsync(firstContext);
+        var secondTask = ProcessAsync(secondContext);
+        start.SetResult(true);
+        var summaries = await Task.WhenAll(firstTask, secondTask);
+
+        Assert.Single(summaries, x => x.IsReplay);
+        Assert.All(summaries, x => Assert.Equal(OcrInterfaceStatuses.Completed, x.InterfaceStatus));
+        Assert.All(summaries, x => Assert.Equal(1, x.UpdatedItemCount));
+
+        await using var verificationContext = database.CreateContext();
+        var transaction = await verificationContext.LimsQaqcCoaParameterTransactions.SingleAsync();
+        var item = await verificationContext.InterfaceLimsOcrResultItems.SingleAsync();
+        Assert.Equal(item.ItemId, transaction.TranId);
     }
 
     [Fact]
@@ -248,6 +316,36 @@ public class OcrCallbackInterfaceServiceTests
         Assert.Equal("old", (await verificationContext.LimsQaqcCoaParameterTests.SingleAsync()).Result);
         Assert.Empty(verificationContext.LimsQaqcCoaParameterTransactions);
         Assert.Equal(scenario.CallbackId, (await verificationContext.InterfaceLimsOcrCallbacks.SingleAsync()).CallbackId);
+
+        ((FailingApplicationDbContext)database.Context).FailAfterSave = false;
+        var retrySummary = await CreateService(database.Context).ProcessAsync(scenario.CallbackId);
+
+        Assert.Equal(OcrInterfaceStatuses.Completed, retrySummary.InterfaceStatus);
+        Assert.False(retrySummary.IsReplay);
+        verificationContext.ChangeTracker.Clear();
+        Assert.Equal("49.2", (await verificationContext.LimsQaqcCoaParameterTests.SingleAsync()).Result);
+        Assert.Single(await verificationContext.LimsQaqcCoaParameterTransactions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RejectsAndPreservesUnrelatedPendingDbContextChanges()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var scenario = await SeedScenarioAsync(database.Context);
+        var unrelatedItem = new WmsItemEntity
+        {
+            ItemMasterId = Guid.NewGuid(),
+            Description = "Unrelated unsaved item"
+        };
+        database.Context.WmsItems.Add(unrelatedItem);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => CreateService(database.Context).ProcessAsync(scenario.CallbackId));
+
+        Assert.Contains("unrelated pending changes", exception.Message);
+        Assert.Equal(EntityState.Added, database.Context.Entry(unrelatedItem).State);
+        await using var verificationContext = database.CreateContext();
+        Assert.Empty(await verificationContext.LimsQaqcCoaParameterTransactions.ToListAsync());
     }
 
     private static OcrCallbackInterfaceService CreateService(ApplicationDbContext context)

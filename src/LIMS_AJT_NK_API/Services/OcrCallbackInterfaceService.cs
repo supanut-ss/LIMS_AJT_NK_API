@@ -1,3 +1,5 @@
+using System.Data;
+using System.Text.Json;
 using LIMS_AJT_NK_API.Data;
 using LIMS_AJT_NK_API.Models;
 using Microsoft.EntityFrameworkCore;
@@ -21,16 +23,44 @@ public sealed class OcrCallbackInterfaceService(
         Guid callbackId,
         CancellationToken cancellationToken = default)
     {
+        // The controller and service can share a DbContext. Detach only this saved
+        // callback graph so a concurrent processor's terminal status is read from
+        // SQL Server without discarding unrelated tracked work.
+        DetachTrackedCallbackGraph(callbackId);
+        if (dbContext.ChangeTracker.HasChanges())
+        {
+            throw new InvalidOperationException(
+                "OCR callback processing requires a DbContext without unrelated pending changes.");
+        }
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
+
         var callback = await dbContext.InterfaceLimsOcrCallbacks
+            .FromSqlInterpolated($"""
+                SELECT *
+                FROM dbo.t_interface_lims_ocr_callback WITH (UPDLOCK, HOLDLOCK)
+                WHERE callback_id = {callbackId}
+                """)
             .Include(x => x.Results)
             .ThenInclude(x => x.Items)
             .SingleOrDefaultAsync(x => x.CallbackId == callbackId, cancellationToken)
             ?? throw new InvalidOperationException($"OCR callback '{callbackId}' was not found.");
 
-        ResetInterfaceFlags(callback);
-        var createdDocumentPaths = new List<string>();
+        if (IsTerminal(callback.InterfaceStatus)
+            && !string.IsNullOrWhiteSpace(callback.InterfaceSummaryJson))
+        {
+            var replay = JsonSerializer.Deserialize<OcrCallbackInterfaceSummary>(
+                callback.InterfaceSummaryJson)
+                ?? throw new InvalidOperationException(
+                    $"OCR callback '{callbackId}' has an invalid saved interface summary.");
+            replay.IsReplay = true;
+            await transaction.CommitAsync(cancellationToken);
+            return replay;
+        }
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var createdDocumentPaths = new List<string>();
 
         try
         {
@@ -55,6 +85,7 @@ public sealed class OcrCallbackInterfaceService(
 
             summary.UpdatedItemCount = summary.Pages.Sum(x => x.UpdatedItemCount);
             summary.SkippedItemCount = summary.Pages.Sum(x => x.SkippedItemCount);
+            summary.AlreadyProcessedItemCount = summary.Pages.Sum(x => x.AlreadyProcessedItemCount);
 
             var completed = hasEligibleResults
                 && summary.Pages
@@ -63,7 +94,7 @@ public sealed class OcrCallbackInterfaceService(
 
             summary.InterfaceStatus = completed
                 ? OcrInterfaceStatuses.Completed
-                : summary.UpdatedItemCount == 0
+                : summary.UpdatedItemCount + summary.AlreadyProcessedItemCount == 0
                     ? OcrInterfaceStatuses.NotMatched
                     : OcrInterfaceStatuses.Partial;
 
@@ -80,6 +111,10 @@ public sealed class OcrCallbackInterfaceService(
             {
                 binding.Page.DocumentId = binding.Document.DocumentId;
             }
+
+            callback.InterfaceStatus = summary.InterfaceStatus;
+            callback.InterfaceSummaryJson = JsonSerializer.Serialize(summary);
+            await dbContext.SaveChangesAsync(cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
 
@@ -138,7 +173,7 @@ public sealed class OcrCallbackInterfaceService(
 
         var sourceLog = await dbContext.InterfaceLimsOcrLogs
             .AsNoTracking()
-            .Where(x => x.ApiName == "input_ocr"
+            .Where(x => (x.ApiName == "input_ocr" || x.ApiName == "input_ocr_file")
                 && x.JobTaskId == callback.JobTaskId
                 && x.FilePath != null)
             .OrderByDescending(x => x.CreateDate)
@@ -373,14 +408,19 @@ public sealed class OcrCallbackInterfaceService(
             {
                 page.UpdatedItemCount++;
             }
+            else if (itemResult.Status == "already_processed")
+            {
+                page.AlreadyProcessedItemCount++;
+            }
             else
             {
                 page.SkippedItemCount++;
             }
         }
 
-        var pageCompleted = page.UpdatedItemCount > 0 && page.SkippedItemCount == 0;
-        page.Status = pageCompleted ? "completed" : page.UpdatedItemCount == 0 ? "not_matched" : "partial";
+        var processedItemCount = page.UpdatedItemCount + page.AlreadyProcessedItemCount;
+        var pageCompleted = processedItemCount > 0 && page.SkippedItemCount == 0;
+        page.Status = pageCompleted ? "completed" : processedItemCount == 0 ? "not_matched" : "partial";
         result.IsInterface = pageCompleted;
 
         return page;
@@ -391,14 +431,22 @@ public sealed class OcrCallbackInterfaceService(
         LimsInboundReceiveEntity inbound,
         CancellationToken cancellationToken)
     {
-        item.IsInterface = false;
-
         var response = new OcrCallbackInterfaceItemResult
         {
             Seq = item.Seq,
             ParameterName = item.ParameterName,
             Status = "skipped"
         };
+
+        if (item.IsInterface
+            || await dbContext.LimsQaqcCoaParameterTransactions
+                .AsNoTracking()
+                .AnyAsync(x => x.TranId == item.ItemId, cancellationToken))
+        {
+            item.IsInterface = true;
+            response.Status = "already_processed";
+            return response;
+        }
 
         if (string.IsNullOrWhiteSpace(item.ResultValue))
         {
@@ -488,7 +536,9 @@ public sealed class OcrCallbackInterfaceService(
 
         dbContext.LimsQaqcCoaParameterTransactions.Add(new LimsQaqcCoaParameterTransactionEntity
         {
-            TranId = Guid.NewGuid(),
+            // The callback item is the durable audit idempotency key. Reprocessing the
+            // same item cannot create another transaction, even after a process restart.
+            TranId = item.ItemId,
             LogType = "OCR Callback",
             ReceiptDetailId = inbound.ReceiptDetailId,
             ManageCoaParameterId = target.ManageCoaParameterId,
@@ -513,18 +563,43 @@ public sealed class OcrCallbackInterfaceService(
             StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void ResetInterfaceFlags(InterfaceLimsOcrCallbackEntity callback)
+    private static bool IsTerminal(string? interfaceStatus)
     {
-        callback.IsInterface = false;
+        return interfaceStatus is OcrInterfaceStatuses.Completed
+            or OcrInterfaceStatuses.Partial
+            or OcrInterfaceStatuses.NotMatched;
+    }
 
-        foreach (var result in callback.Results)
+    private void DetachTrackedCallbackGraph(Guid callbackId)
+    {
+        var resultIds = dbContext.ChangeTracker
+            .Entries<InterfaceLimsOcrResultEntity>()
+            .Where(x => x.Entity.CallbackId == callbackId)
+            .Select(x => x.Entity.ResultId)
+            .ToHashSet();
+
+        foreach (var entry in dbContext.ChangeTracker
+                     .Entries<InterfaceLimsOcrResultItemEntity>()
+                     .Where(x => resultIds.Contains(x.Entity.ResultId))
+                     .ToList())
         {
-            result.IsInterface = false;
+            entry.State = EntityState.Detached;
+        }
 
-            foreach (var item in result.Items)
-            {
-                item.IsInterface = false;
-            }
+        foreach (var entry in dbContext.ChangeTracker
+                     .Entries<InterfaceLimsOcrResultEntity>()
+                     .Where(x => x.Entity.CallbackId == callbackId)
+                     .ToList())
+        {
+            entry.State = EntityState.Detached;
+        }
+
+        foreach (var entry in dbContext.ChangeTracker
+                     .Entries<InterfaceLimsOcrCallbackEntity>()
+                     .Where(x => x.Entity.CallbackId == callbackId)
+                     .ToList())
+        {
+            entry.State = EntityState.Detached;
         }
     }
 

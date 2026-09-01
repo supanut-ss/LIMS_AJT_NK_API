@@ -1,3 +1,7 @@
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
 USE [LIMS_NK];
 GO
 
@@ -18,14 +22,26 @@ BEGIN
     CREATE TABLE [dbo].[t_interface_lims_ocr_callback] (
         [callback_id]  UNIQUEIDENTIFIER NOT NULL CONSTRAINT [df_ocr_callback_id] DEFAULT (NEWSEQUENTIALID()),
         [job_task_id]  VARCHAR(100)     NOT NULL,
+        [idempotency_key] NVARCHAR(100) COLLATE Latin1_General_100_BIN2 NULL,
+        [request_hash] CHAR(64)         NULL,
+        [interface_status] VARCHAR(25)  NULL,
+        [interface_summary_json] NVARCHAR(MAX) NULL,
+        [source_summary_json] NVARCHAR(MAX) NULL,
         [is_interface] BIT              NOT NULL CONSTRAINT [df_ocr_callback_is_interface] DEFAULT (0),
         [create_by]    VARCHAR(25)      NULL,
         [create_date]  DATETIME         NOT NULL CONSTRAINT [df_ocr_callback_create_date] DEFAULT (GETDATE()),
-        CONSTRAINT [pk_ocr_callback_id] PRIMARY KEY CLUSTERED ([callback_id] ASC)
+        CONSTRAINT [pk_ocr_callback_id] PRIMARY KEY CLUSTERED ([callback_id] ASC),
+        CONSTRAINT [ck_ocr_callback_idempotency_pair]
+            CHECK (([idempotency_key] IS NULL AND [request_hash] IS NULL)
+                OR ([idempotency_key] IS NOT NULL AND [request_hash] IS NOT NULL))
     );
 
     CREATE INDEX [idx_ocr_callback_job_task_id] 
         ON [dbo].[t_interface_lims_ocr_callback] ([job_task_id] ASC);
+
+    CREATE UNIQUE INDEX [uq_ocr_callback_idempotency_key]
+        ON [dbo].[t_interface_lims_ocr_callback] ([idempotency_key] ASC)
+        WHERE [idempotency_key] IS NOT NULL;
 END
 GO
 
@@ -42,8 +58,10 @@ BEGIN
         [file_id]              VARCHAR(100)     NULL,
         [tracking_id]          VARCHAR(100)     NULL,
         [tracking_status]      VARCHAR(50)      NOT NULL,
+        [status]               NVARCHAR(50)     NULL,
         [product_name]         VARCHAR(255)     NULL,
         [document_type]        VARCHAR(100)     NULL,
+        [document_classification] NVARCHAR(100) NULL,
         [supplier_name]        VARCHAR(255)     NULL,
         [lot_number]           VARCHAR(100)     NULL,
         [origin_supplier_name] VARCHAR(255)     NULL,

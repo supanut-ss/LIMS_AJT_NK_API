@@ -19,6 +19,31 @@ mapping ใน `t_lims_coa_parameter_mapping` ก่อนอัปเดต
 `t_lims_qaqc_coa_parameter_test` พร้อมสร้าง audit ใน
 `t_lims_qaqc_coa_parameter_transaction`
 
+## Idempotency ของ callback
+
+- ระบบ normalize `job_task_id` ด้วยการ trim แล้วใช้เป็น `idempotency_key` โดยถือว่า
+  ตัวพิมพ์เล็ก/ใหญ่เป็นคนละ key
+- hash คำนวณจากค่าที่ normalize/parse แล้วและมีผลต่อการบันทึกหรือประมวลผล
+- key เดิมและ hash เดิม: ตอบ HTTP 200 ด้วย `callback_id` และ summary เดิม,
+  `is_duplicate = true` โดยไม่อัปเดต parameter, audit หรือ copy document ซ้ำ
+- key เดิมแต่ hash ต่าง: ตอบ HTTP 409 และไม่สร้าง callback graph หรือ QAQC side effect
+- ผล `completed`, `partial` และ `not_matched` เป็นผลปลายทางและจะถูก replay;
+  หากต้องการส่งข้อมูลที่แก้ไขแล้วต้องใช้ `job_task_id` ใหม่
+- ถ้า interface ล้มเหลวและตอบ HTTP 500 callback จะคงสถานะ `pending`; การส่ง payload
+  เดิมซ้ำจะ retry callback เดิมหลังจาก transaction ก่อนหน้าถูก rollback
+
+`idempotency_status` มีค่า `accepted` สำหรับ callback ใหม่, `replayed` เมื่อคืนผล
+ปลายทางเดิมโดยไม่มี side effect และ `processed_existing` เมื่อ request พบ callback
+สถานะ pending แล้วเป็นผู้ประมวลผลรายการเดิมจนเสร็จ
+
+การรับประกันนี้เริ่มกับ callback ที่สร้างหลัง deploy migration รุ่น idempotency เท่านั้น
+ข้อมูลเก่าที่ `idempotency_key` เป็น NULL จะไม่ถูก backfill เพื่อหลีกเลี่ยงการรวม callback
+ซ้ำที่อาจมี payload ต่างกันโดยอัตโนมัติ ดังนั้นการ retry `job_task_id` เก่าครั้งแรกหลัง
+deploy อาจสร้าง canonical callback ใหม่หนึ่งรายการ
+
+Audit ของ parameter ใช้ `item_id` ของ OCR เป็น `tran_id` โดยตรง ดังนั้น primary key
+ของ `t_lims_qaqc_coa_parameter_transaction` เป็นตัวป้องกัน audit ซ้ำระดับปลายทาง
+
 ## การจัดเก็บไฟล์ COA
 
 เมื่อจับคู่ inbound ได้ ระบบจะใช้ `job_task_id` หา source PDF จาก log ของ
@@ -43,11 +68,14 @@ mapping ใน `t_lims_coa_parameter_mapping` ก่อนอัปเดต
   "data": {
     "callback_id": "e9a0dbcf-8efb-4cc8-8d02-e25df600b3e5",
     "job_task_id": "JOB-TEST-001",
+    "is_duplicate": false,
+    "idempotency_status": "accepted",
     "result_count": 1,
     "item_count": 2,
     "interface_status": "partial",
     "updated_item_count": 1,
     "skipped_item_count": 1,
+    "already_processed_item_count": 0,
     "pages": [
       {
         "page_id": 1,
@@ -58,6 +86,7 @@ mapping ใน `t_lims_coa_parameter_mapping` ก่อนอัปเดต
         "document_path": "../_Documents/QC_COA/f835b76a60c64ab3abdb7355e2aa66a_20260818103000123_aabbccdd.pdf",
         "updated_item_count": 1,
         "skipped_item_count": 1,
+        "already_processed_item_count": 0,
         "items": [
           {
             "seq": 1,
@@ -90,4 +119,6 @@ mapping ใน `t_lims_coa_parameter_mapping` ก่อนอัปเดต
 
 Payload รองรับทั้ง `page_id` แบบเดิมและ `file_id` จาก Aji OCR หากมีเฉพาะ
 `file_id` ระบบจะกำหนด `page_id` ตามลำดับรายการเพื่อใช้เป็น key ภายใน และเก็บ
-`file_id`, quantity/UOM และ `confident` แยกไว้ใน callback result
+`file_id`, quantity/UOM, `confident`, result `status` และ
+`document_classification` แยกไว้ใน callback result ส่วน `summary` จากต้นทางจะ
+เก็บเป็น JSON ที่ callback header เพื่อรักษา payload ตามไฟล์ผล OCR

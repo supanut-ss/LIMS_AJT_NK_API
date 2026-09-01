@@ -4,6 +4,7 @@ namespace LIMS_AJT_NK_API.Services;
 
 public static class OcrInterfaceStatuses
 {
+    public const string Pending = "pending";
     public const string Completed = "completed";
     public const string Partial = "partial";
     public const string NotMatched = "not_matched";
@@ -20,11 +21,17 @@ public sealed class OcrCallbackInterfaceSummary
     [JsonPropertyName("skipped_item_count")]
     public int SkippedItemCount { get; set; }
 
+    [JsonPropertyName("already_processed_item_count")]
+    public int AlreadyProcessedItemCount { get; set; }
+
     [JsonPropertyName("pages")]
     public List<OcrCallbackInterfacePageResult> Pages { get; set; } = [];
 
     [JsonIgnore]
     public bool IsCompleted => InterfaceStatus == OcrInterfaceStatuses.Completed;
+
+    [JsonIgnore]
+    public bool IsReplay { get; set; }
 }
 
 public sealed class OcrCallbackInterfacePageResult
@@ -59,6 +66,9 @@ public sealed class OcrCallbackInterfacePageResult
 
     [JsonPropertyName("skipped_item_count")]
     public int SkippedItemCount { get; set; }
+
+    [JsonPropertyName("already_processed_item_count")]
+    public int AlreadyProcessedItemCount { get; set; }
 
     [JsonPropertyName("items")]
     public List<OcrCallbackInterfaceItemResult> Items { get; set; } = [];

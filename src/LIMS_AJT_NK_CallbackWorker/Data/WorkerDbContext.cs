@@ -20,6 +20,9 @@ public class WorkerDbContext(DbContextOptions<WorkerDbContext> options) : DbCont
             entity.Property(x => x.ConfigId).HasColumnName("config_id").HasDefaultValueSql("NEWSEQUENTIALID()");
             entity.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasColumnType("bit").HasDefaultValue(true);
             entity.Property(x => x.InputOcrUrl).HasColumnName("input_ocr_url").HasMaxLength(500).IsRequired();
+            entity.Property(x => x.InputOcrFileUrl).HasColumnName("input_ocr_file_url").HasMaxLength(500);
+            entity.Property(x => x.SubmissionMode).HasColumnName("submission_mode").HasMaxLength(20).HasDefaultValue(OcrSubmissionPolicy.PathSubmissionMode).IsRequired();
+            entity.Property(x => x.InputOcrFileFieldName).HasColumnName("input_ocr_file_field_name").HasMaxLength(100).HasDefaultValue("file").IsRequired();
             entity.Property(x => x.CallbackUrl).HasColumnName("callback_url").HasMaxLength(500);
             entity.Property(x => x.InboundDirectory).HasColumnName("inbound_directory").HasMaxLength(500).IsRequired();
             entity.Property(x => x.ProcessingDirectory).HasColumnName("processing_directory").HasMaxLength(500).IsRequired();

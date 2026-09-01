@@ -10,6 +10,27 @@ public class CallbackRequest
 
     [JsonPropertyName("ocr_result")]
     public List<OcrResult> OcrResult { get; set; } = [];
+
+    [JsonPropertyName("summary")]
+    public CallbackSourceSummary? Summary { get; set; }
+}
+
+public class CallbackSourceSummary
+{
+    [JsonPropertyName("total")]
+    public int Total { get; set; }
+
+    [JsonPropertyName("success")]
+    public int Success { get; set; }
+
+    [JsonPropertyName("processing")]
+    public int Processing { get; set; }
+
+    [JsonPropertyName("fail")]
+    public int Fail { get; set; }
+
+    [JsonPropertyName("other")]
+    public int Other { get; set; }
 }
 
 public class OcrResult
@@ -26,6 +47,9 @@ public class OcrResult
     [JsonPropertyName("tracking_status")]
     public string? TrackingStatus { get; set; }
 
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
     [JsonPropertyName("body_json")]
     public OcrBodyJson BodyJson { get; set; } = new();
 
@@ -40,6 +64,9 @@ public class OcrBodyJson
 
     [JsonPropertyName("document_type")]
     public string? DocumentType { get; set; }
+
+    [JsonPropertyName("document_classification")]
+    public string? DocumentClassification { get; set; }
 
     [JsonPropertyName("Supplier_name")]
     public string? SupplierName { get; set; }

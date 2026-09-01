@@ -32,6 +32,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             entity.Property(x => x.ConfigId).HasColumnName("config_id").HasDefaultValueSql("NEWSEQUENTIALID()");
             entity.Property(x => x.IsEnabled).HasColumnName("is_enabled").HasColumnType("bit").HasDefaultValue(true);
             entity.Property(x => x.InputOcrUrl).HasColumnName("input_ocr_url").HasMaxLength(500).IsRequired();
+            entity.Property(x => x.InputOcrFileUrl).HasColumnName("input_ocr_file_url").HasMaxLength(500);
+            entity.Property(x => x.SubmissionMode).HasColumnName("submission_mode").HasMaxLength(20).HasDefaultValue("path").IsRequired();
+            entity.Property(x => x.InputOcrFileFieldName).HasColumnName("input_ocr_file_field_name").HasMaxLength(100).HasDefaultValue("file").IsRequired();
             entity.Property(x => x.CallbackUrl).HasColumnName("callback_url").HasMaxLength(500);
             entity.Property(x => x.InboundDirectory).HasColumnName("inbound_directory").HasMaxLength(500).IsRequired();
             entity.Property(x => x.ProcessingDirectory).HasColumnName("processing_directory").HasMaxLength(500).IsRequired();
@@ -88,11 +91,23 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
             entity.Property(x => x.CallbackId).HasColumnName("callback_id").HasDefaultValueSql("NEWSEQUENTIALID()");
             entity.Property(x => x.JobTaskId).HasColumnName("job_task_id").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.IdempotencyKey)
+                .HasColumnName("idempotency_key")
+                .HasMaxLength(100)
+                .UseCollation("Latin1_General_100_BIN2");
+            entity.Property(x => x.RequestHash).HasColumnName("request_hash").HasMaxLength(64).IsFixedLength().IsUnicode(false);
+            entity.Property(x => x.InterfaceStatus).HasColumnName("interface_status").HasMaxLength(25);
+            entity.Property(x => x.InterfaceSummaryJson).HasColumnName("interface_summary_json");
+            entity.Property(x => x.SourceSummaryJson).HasColumnName("source_summary_json");
             entity.Property(x => x.IsInterface).HasColumnName("is_interface").HasColumnType("bit").HasDefaultValue(false);
             entity.Property(x => x.CreateBy).HasColumnName("create_by").HasMaxLength(25);
             entity.Property(x => x.CreateDate).HasColumnName("create_date").HasColumnType("datetime").HasDefaultValueSql("GETDATE()");
 
             entity.HasIndex(x => x.JobTaskId);
+            entity.HasIndex(x => x.IdempotencyKey)
+                .IsUnique()
+                .HasFilter("[idempotency_key] IS NOT NULL")
+                .HasDatabaseName("uq_ocr_callback_idempotency_key");
         });
 
         modelBuilder.Entity<InterfaceLimsOcrResultEntity>(entity =>
@@ -107,9 +122,11 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             entity.Property(x => x.FileId).HasColumnName("file_id").HasMaxLength(100);
             entity.Property(x => x.TrackingId).HasColumnName("tracking_id").HasMaxLength(100);
             entity.Property(x => x.TrackingStatus).HasColumnName("tracking_status").HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(50);
 
             entity.Property(x => x.ProductName).HasColumnName("product_name").HasMaxLength(255);
             entity.Property(x => x.DocumentType).HasColumnName("document_type").HasMaxLength(100);
+            entity.Property(x => x.DocumentClassification).HasColumnName("document_classification").HasMaxLength(100);
             entity.Property(x => x.SupplierName).HasColumnName("supplier_name").HasMaxLength(255);
             entity.Property(x => x.LotNumber).HasColumnName("lot_number").HasMaxLength(100);
             entity.Property(x => x.OriginSupplierName).HasColumnName("origin_supplier_name").HasMaxLength(255);

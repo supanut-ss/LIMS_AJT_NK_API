@@ -18,6 +18,9 @@ public static class DbSeeder
         {
             IsEnabled = true,
             InputOcrUrl = "http://localhost:5117/input_ocr",
+            InputOcrFileUrl = "http://localhost:5117/input_ocr_file",
+            SubmissionMode = OcrSubmissionPolicy.PathSubmissionMode,
+            InputOcrFileFieldName = "file",
             CallbackUrl = "http://localhost:5117/api/call_back",
             InboundDirectory = "1_Inbound",
             ProcessingDirectory = "2_Processing",

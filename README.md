@@ -49,6 +49,19 @@ dotnet test .\tests\LIMS_AJT_NK_API.Tests\LIMS_AJT_NK_API.Tests.csproj
 ก่อน deploy callback contract รุ่นที่รองรับ `file_id` ให้รัน migration
 `database\20260818_align_ocr_callback_payload_schema.sql` กับฐานข้อมูลเป้าหมาย
 
+ก่อน deploy callback รุ่นที่ป้องกันการประมวลผลซ้ำ ให้รัน migration
+`database\20260825_add_ocr_callback_idempotency.sql` และหยุด API callback รุ่นเก่า
+ทุก instance ก่อนเปิดรุ่นใหม่ เพื่อไม่ให้รุ่นเก่าแทรก callback ที่ไม่มี
+`idempotency_key`
+
+ก่อน deploy contract ที่ตรงกับไฟล์ผล OCR ให้รัน migration
+`database\20260901_support_ocr_file_result_contract.sql` เพื่อเก็บ `summary`,
+result `status` และ `document_classification`
+
+ก่อนเปิดใช้ Worker เส้น `input_ocr_file` ให้รัน migration
+`database\20260901_add_input_ocr_file_worker_route.sql` แล้วตั้งค่า
+`submission_mode = 'file'` และ `input_ocr_file_url` ใน config row ที่ใช้งาน
+
 จากนั้นกำหนดตำแหน่ง `_Documents` จริงบน Host ให้ config row ที่ใช้งาน เช่น:
 
 ```sql

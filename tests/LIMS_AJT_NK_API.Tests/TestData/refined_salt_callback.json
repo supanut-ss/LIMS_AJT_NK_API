@@ -1,12 +1,21 @@
 {
 	"job_task_id": "job_20260817_104401",
+	"summary": {
+		"total": 1,
+		"success": 1,
+		"processing": 0,
+		"fail": 0,
+		"other": 0
+	},
 	"ocr_result": [
 		{
 			"file_id": "6a8283ddb3b7d074da97e8f1",
 			"tracking_id": "85cb5908a421b66d63972d4dfaf89f77",
-			"tracking_status": "ReadyToCheck",
+			"tracking_status": "readytocheck",
+			"status": "readytocheck",
 			"body_json": {
 				"document_type": "CERTIFICATE OF ANALYSIS",
+				"document_classification": "certificate_of_analysis",
 				"product_name": "Refined salt 50 kg.",
 				"origin_product_name": "IODIZED DRIED REFINED SALT",
 				"Internal_lot": "26KC052501",

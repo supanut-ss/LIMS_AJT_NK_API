@@ -1,6 +1,7 @@
 # LIMS_AJT_NK_CallbackWorker
 
-Worker Service สำหรับเฝ้าดูโฟลเดอร์แล้วส่ง `POST /input_ocr` ตามรอบเวลา
+Worker Service สำหรับเฝ้าดูโฟลเดอร์แล้วส่ง OCR ได้ 2 เส้นทางตาม config:
+`POST /input_ocr` แบบ JSON path หรือ `POST /input_ocr_file` แบบ multipart PDF
 
 รองรับการรันเป็น Windows Service, UNC shared path, ตรวจว่าไฟล์เขียนเสร็จแล้ว,
 retry แบบ exponential backoff และ recovery งานที่ค้างสถานะ `sending`
@@ -21,6 +22,9 @@ Worker อ่านค่าจากตาราง `t_interface_lims_ocr_confi
 ถ้าตารางยังไม่มีข้อมูล ระบบจะ seed ค่าเริ่มต้นให้อัตโนมัติ:
 
 - `input_ocr_url = http://localhost:5117/input_ocr`
+- `input_ocr_file_url = http://localhost:5117/input_ocr_file`
+- `submission_mode = path`
+- `input_ocr_file_field_name = file`
 - `callback_url = http://localhost:5117/api/call_back`
 - โฟลเดอร์ `1_Inbound`, `2_Processing`, `3_Success`, `4_Error`
 - `interval_seconds = 30`
@@ -30,6 +34,9 @@ Worker อ่านค่าจากตาราง `t_interface_lims_ocr_confi
 - `request_timeout_seconds = 60`
 
 - `input_ocr_url`: ปลายทาง `input_ocr`
+- `input_ocr_file_url`: ปลายทาง multipart `input_ocr_file`
+- `submission_mode`: `path` สำหรับ `input_ocr` หรือ `file` สำหรับ `input_ocr_file`
+- `input_ocr_file_field_name`: ชื่อ multipart field ของ PDF ค่าเริ่มต้น `file`
 - `callback_url`: callback URL ที่ส่งใน payload
 - `inbound_directory`: โฟลเดอร์รับไฟล์
 - `processing_directory`: โฟลเดอร์ระหว่างประมวลผล
@@ -64,6 +71,20 @@ SET inbound_directory = N'\\fileserver\LIMS_OCR\1_Inbound',
     request_timeout_seconds = 60
 WHERE config_id = @config_id;
 ```
+
+เปิดใช้เส้น upload PDF โดยรัน migration
+`database\20260901_add_input_ocr_file_worker_route.sql` แล้วตั้งค่า:
+
+```sql
+UPDATE dbo.t_interface_lims_ocr_config_api
+SET submission_mode = N'file',
+    input_ocr_file_url = N'https://aji-ocr.example/input_ocr_file',
+    input_ocr_file_field_name = N'file'
+WHERE config_id = @config_id;
+```
+
+เปลี่ยนกลับเส้นเดิมได้ด้วย `submission_mode = N'path'` งานสถานะ `sending`
+จะ recover ด้วย route และ URL ที่บันทึกไว้ใน log ตอนสร้างงาน ไม่เปลี่ยนตาม config ใหม่
 
 Windows Service account ต้องมี Share permission และ NTFS permission แบบ
 Read/Write/Modify ในทั้งสี่ directory
@@ -124,7 +145,9 @@ sc.exe start LimsAjtNkOcrWorker
 
 ## Payload ที่ส่ง
 
-Worker จะสแกนไฟล์ `.pdf` ใน `1_Inbound` แล้ว move ไป `2_Processing` ก่อนส่ง payload `input_ocr`
+Worker จะสแกนไฟล์ `.pdf` ใน `1_Inbound` แล้ว move ไป `2_Processing` ก่อนส่ง
+ตาม `submission_mode`; เส้น `file` ส่ง multipart fields `flow_id`, `job_task_id`,
+`callback_url` และ PDF field ตาม `input_ocr_file_field_name`
 
 สถานะหลักใน `t_interface_lims_ocr_log`:
 

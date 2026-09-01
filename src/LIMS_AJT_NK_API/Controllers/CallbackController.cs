@@ -1,10 +1,16 @@
+using System.Buffers;
+using System.Data;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LIMS_AJT_NK_API.Data;
 using LIMS_AJT_NK_API.Models;
 using LIMS_AJT_NK_API.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace LIMS_AJT_NK_API.Controllers;
 
@@ -94,10 +100,53 @@ public class CallbackController(
 
         var now = DateTime.Now;
         var normalizedJobTaskId = request.JobTaskId.Trim();
-        var callback = BuildCallback(request, normalizedJobTaskId, now);
+        // job_task_id is an opaque producer ID. Only surrounding whitespace is
+        // normalized; case remains significant and the column uses BIN2 collation.
+        var idempotencyKey = normalizedJobTaskId;
+        request.JobTaskId = normalizedJobTaskId;
+        var candidate = BuildCallback(request, normalizedJobTaskId, idempotencyKey, now);
+        var requestHash = ComputeRequestHash(candidate);
+        candidate.RequestHash = requestHash;
 
-        dbContext.InterfaceLimsOcrCallbacks.Add(callback);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        var (callback, isDuplicate) = await GetOrCreateCallbackAsync(
+            candidate,
+            idempotencyKey,
+            cancellationToken);
+
+        if (!string.Equals(callback.RequestHash, requestHash, StringComparison.Ordinal))
+        {
+            var conflictResponse = new
+            {
+                status = "error",
+                message = "job_task_id was already used with a different callback payload",
+                data = new
+                {
+                    callback_id = callback.CallbackId,
+                    job_task_id = callback.JobTaskId,
+                    interface_status = callback.InterfaceStatus
+                },
+                errors = new[]
+                {
+                    new
+                    {
+                        field = "job_task_id",
+                        message = "Use a new job_task_id when the OCR payload changes"
+                    }
+                }
+            };
+
+            await WriteCallbackLogAsync(
+                request,
+                callback.JobTaskId,
+                conflictResponse,
+                409,
+                "callback_conflict",
+                false,
+                "idempotency_payload_conflict",
+                cancellationToken);
+
+            return Conflict(conflictResponse);
+        }
 
         OcrCallbackInterfaceSummary interfaceSummary;
         try
@@ -119,7 +168,7 @@ public class CallbackController(
                 data = new
                 {
                     callback_id = callback.CallbackId,
-                    job_task_id = normalizedJobTaskId,
+                    job_task_id = callback.JobTaskId,
                     result_count = callback.Results.Count,
                     item_count = callback.Results.Sum(x => x.Items.Count),
                     interface_status = "error"
@@ -129,7 +178,7 @@ public class CallbackController(
 
             await WriteCallbackLogAsync(
                 request,
-                normalizedJobTaskId,
+                callback.JobTaskId,
                 errorResponse,
                 500,
                 "callback_error",
@@ -140,34 +189,52 @@ public class CallbackController(
             return StatusCode(500, errorResponse);
         }
 
+        var idempotencyStatus = !isDuplicate
+            ? "accepted"
+            : interfaceSummary.IsReplay
+                ? "replayed"
+                : "processed_existing";
         var response = new
         {
             status = "success",
-            message = "Callback received and processed",
+            message = idempotencyStatus switch
+            {
+                "replayed" => "Duplicate callback received; the original result was replayed",
+                "processed_existing" => "Existing pending callback was processed",
+                _ => "Callback received and processed"
+            },
             data = new
             {
                 callback_id = callback.CallbackId,
-                job_task_id = normalizedJobTaskId,
+                job_task_id = callback.JobTaskId,
+                is_duplicate = isDuplicate,
+                idempotency_status = idempotencyStatus,
                 result_count = callback.Results.Count,
                 item_count = callback.Results.Sum(x => x.Items.Count),
                 interface_status = interfaceSummary.InterfaceStatus,
                 updated_item_count = interfaceSummary.UpdatedItemCount,
                 skipped_item_count = interfaceSummary.SkippedItemCount,
+                already_processed_item_count = interfaceSummary.AlreadyProcessedItemCount,
                 pages = interfaceSummary.Pages
             },
             errors = (object?)null
         };
 
-        var workStatus = interfaceSummary.InterfaceStatus switch
+        var workStatus = idempotencyStatus switch
         {
-            OcrInterfaceStatuses.Completed => "callback_processed",
-            OcrInterfaceStatuses.Partial => "callback_partial",
-            _ => "callback_not_matched"
+            "replayed" => "callback_replayed",
+            "processed_existing" => "callback_processed_existing",
+            _ => interfaceSummary.InterfaceStatus switch
+            {
+                OcrInterfaceStatuses.Completed => "callback_processed",
+                OcrInterfaceStatuses.Partial => "callback_partial",
+                _ => "callback_not_matched"
+            }
         };
 
         await WriteCallbackLogAsync(
             request,
-            normalizedJobTaskId,
+            callback.JobTaskId,
             response,
             200,
             workStatus,
@@ -176,6 +243,82 @@ public class CallbackController(
             cancellationToken);
 
         return Ok(response);
+    }
+
+    private async Task<(InterfaceLimsOcrCallbackEntity Callback, bool IsDuplicate)> GetOrCreateCallbackAsync(
+        InterfaceLimsOcrCallbackEntity callback,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
+
+        try
+        {
+            var existing = await dbContext.InterfaceLimsOcrCallbacks
+                .FromSqlInterpolated($"""
+                    SELECT *
+                    FROM dbo.t_interface_lims_ocr_callback WITH
+                        (UPDLOCK, HOLDLOCK, INDEX(uq_ocr_callback_idempotency_key))
+                    WHERE idempotency_key = {idempotencyKey}
+                    """)
+                .Include(x => x.Results)
+                .ThenInclude(x => x.Items)
+                .SingleOrDefaultAsync(cancellationToken);
+
+            if (existing is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return (existing, true);
+            }
+
+            dbContext.InterfaceLimsOcrCallbacks.Add(callback);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return (callback, false);
+        }
+        catch (DbUpdateException ex) when (IsUniqueConstraintViolation(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            DetachCallbackGraph(callback);
+
+            var existing = await LoadCallbackByIdempotencyKeyAsync(idempotencyKey, cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"Idempotent callback '{idempotencyKey}' was not found after a unique-key conflict.",
+                    ex);
+            return (existing, true);
+        }
+    }
+
+    private Task<InterfaceLimsOcrCallbackEntity?> LoadCallbackByIdempotencyKeyAsync(
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        return dbContext.InterfaceLimsOcrCallbacks
+            .Include(x => x.Results)
+            .ThenInclude(x => x.Items)
+            .SingleOrDefaultAsync(x => x.IdempotencyKey == idempotencyKey, cancellationToken);
+    }
+
+    private static bool IsUniqueConstraintViolation(DbUpdateException exception)
+    {
+        return exception.InnerException is SqlException { Number: 2601 or 2627 };
+    }
+
+    private void DetachCallbackGraph(InterfaceLimsOcrCallbackEntity callback)
+    {
+        foreach (var item in callback.Results.SelectMany(x => x.Items))
+        {
+            dbContext.Entry(item).State = EntityState.Detached;
+        }
+
+        foreach (var result in callback.Results)
+        {
+            dbContext.Entry(result).State = EntityState.Detached;
+        }
+
+        dbContext.Entry(callback).State = EntityState.Detached;
     }
 
     private async Task WriteCallbackLogAsync(
@@ -213,12 +356,18 @@ public class CallbackController(
     private static InterfaceLimsOcrCallbackEntity BuildCallback(
         OcrCallbackRequest request,
         string jobTaskId,
+        string idempotencyKey,
         DateTime now)
     {
         var callback = new InterfaceLimsOcrCallbackEntity
         {
             CallbackId = Guid.NewGuid(),
             JobTaskId = jobTaskId,
+            IdempotencyKey = idempotencyKey,
+            InterfaceStatus = OcrInterfaceStatuses.Pending,
+            SourceSummaryJson = request.Summary is null
+                ? null
+                : CanonicalizeJson(JsonSerializer.Serialize(request.Summary)),
             IsInterface = false,
             CreateBy = "api",
             CreateDate = now
@@ -254,21 +403,23 @@ public class CallbackController(
                 IsInterface = false,
                 PageId = storedPageId,
                 FileId = NormalizeOptional(page.FileId),
-                TrackingId = page.TrackingId,
+                TrackingId = NormalizeOptional(page.TrackingId),
                 TrackingStatus = page.TrackingStatus!.Trim(),
-                ProductName = body?.ProductName,
-                DocumentType = body?.DocumentType,
-                SupplierName = body?.SupplierName,
+                Status = NormalizeOptional(page.Status),
+                ProductName = NormalizeOptional(body?.ProductName),
+                DocumentType = NormalizeOptional(body?.DocumentType),
+                DocumentClassification = NormalizeOptional(body?.DocumentClassification),
+                SupplierName = NormalizeOptional(body?.SupplierName),
                 LotNumber = FirstNotEmpty(body?.LotNumber, body?.InternalLot),
-                OriginSupplierName = body?.OriginSupplierName,
-                OriginProductName = body?.OriginProductName,
+                OriginSupplierName = NormalizeOptional(body?.OriginSupplierName),
+                OriginProductName = NormalizeOptional(body?.OriginProductName),
                 ExpiryDate = ParseDate(body?.ExpiryDate),
                 MfgDate = ParseDate(body?.MfgDate),
-                InternalLot = body?.InternalLot,
+                InternalLot = NormalizeOptional(body?.InternalLot),
                 Quantity = quantity.Value,
                 QuantityUom = quantity.Uom,
                 ConfidenceJson = page.Confident.HasValue
-                    ? JsonSerializer.Serialize(page.Confident.Value)
+                    ? CanonicalizeJson(page.Confident.Value.GetRawText())
                     : null,
                 CreateBy = "api",
                 CreateDate = now
@@ -286,8 +437,8 @@ public class CallbackController(
                         IsInterface = false,
                         Seq = index + 1,
                         ParameterName = item.ParameterName!.Trim(),
-                        ResultValue = item.Result,
-                        Uom = item.Uom,
+                        ResultValue = NormalizeOptional(item.Result),
+                        Uom = NormalizeOptional(item.Uom),
                         CreateBy = "api",
                         CreateDate = now
                     });
@@ -298,6 +449,97 @@ public class CallbackController(
         }
 
         return callback;
+    }
+
+    private static string ComputeRequestHash(InterfaceLimsOcrCallbackEntity callback)
+    {
+        var canonicalPayload = new
+        {
+            job_task_id = callback.IdempotencyKey,
+            source_summary = CanonicalizeJson(callback.SourceSummaryJson),
+            ocr_result = callback.Results
+                .OrderBy(x => x.PageId)
+                .Select(x => new
+                {
+                    page_id = x.PageId,
+                    file_id = x.FileId,
+                    tracking_id = NormalizeOptional(x.TrackingId),
+                    tracking_status = x.TrackingStatus.Trim(),
+                    status = NormalizeOptional(x.Status),
+                    product_name = NormalizeOptional(x.ProductName),
+                    document_type = NormalizeOptional(x.DocumentType),
+                    document_classification = NormalizeOptional(x.DocumentClassification),
+                    supplier_name = NormalizeOptional(x.SupplierName),
+                    lot_number = NormalizeOptional(x.LotNumber),
+                    origin_supplier_name = NormalizeOptional(x.OriginSupplierName),
+                    origin_product_name = NormalizeOptional(x.OriginProductName),
+                    expiry_date = x.ExpiryDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    mfg_date = x.MfgDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    internal_lot = NormalizeOptional(x.InternalLot),
+                    quantity = x.Quantity,
+                    quantity_uom = x.QuantityUom,
+                    confident = CanonicalizeJson(x.ConfidenceJson),
+                    body_item = x.Items
+                        .OrderBy(item => item.Seq)
+                        .Select(item => new
+                        {
+                            seq = item.Seq,
+                            parameter_name = item.ParameterName.Trim(),
+                            result = NormalizeOptional(item.ResultValue),
+                            uom = NormalizeOptional(item.Uom)
+                        })
+                })
+        };
+
+        var json = JsonSerializer.Serialize(canonicalPayload);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+    }
+
+    private static string? CanonicalizeJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(json);
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            WriteCanonicalJson(writer, document.RootElement);
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static void WriteCanonicalJson(Utf8JsonWriter writer, JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            writer.WriteStartObject();
+            foreach (var property in element.EnumerateObject().OrderBy(x => x.Name, StringComparer.Ordinal))
+            {
+                writer.WritePropertyName(property.Name);
+                WriteCanonicalJson(writer, property.Value);
+            }
+
+            writer.WriteEndObject();
+            return;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            writer.WriteStartArray();
+            foreach (var item in element.EnumerateArray())
+            {
+                WriteCanonicalJson(writer, item);
+            }
+
+            writer.WriteEndArray();
+            return;
+        }
+
+        element.WriteTo(writer);
     }
 
     private static (string Field, string Message)? ValidateResults(IEnumerable<OcrResultRequest> results)
