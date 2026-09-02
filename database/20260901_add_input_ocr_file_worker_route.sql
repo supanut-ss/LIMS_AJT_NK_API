@@ -18,7 +18,7 @@ IF COL_LENGTH('dbo.t_interface_lims_ocr_config_api', 'input_ocr_file_field_name'
 BEGIN
     ALTER TABLE dbo.t_interface_lims_ocr_config_api
         ADD input_ocr_file_field_name NVARCHAR(100) NOT NULL
-            CONSTRAINT df_t_interface_lims_ocr_config_api_file_field DEFAULT(N'file');
+            CONSTRAINT df_t_interface_lims_ocr_config_api_file_field DEFAULT(N'files');
 END;
 
 IF NOT EXISTS

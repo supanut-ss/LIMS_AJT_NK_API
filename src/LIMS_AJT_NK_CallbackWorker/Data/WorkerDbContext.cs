@@ -22,7 +22,11 @@ public class WorkerDbContext(DbContextOptions<WorkerDbContext> options) : DbCont
             entity.Property(x => x.InputOcrUrl).HasColumnName("input_ocr_url").HasMaxLength(500).IsRequired();
             entity.Property(x => x.InputOcrFileUrl).HasColumnName("input_ocr_file_url").HasMaxLength(500);
             entity.Property(x => x.SubmissionMode).HasColumnName("submission_mode").HasMaxLength(20).HasDefaultValue(OcrSubmissionPolicy.PathSubmissionMode).IsRequired();
-            entity.Property(x => x.InputOcrFileFieldName).HasColumnName("input_ocr_file_field_name").HasMaxLength(100).HasDefaultValue("file").IsRequired();
+            entity.Property(x => x.InputOcrFileFieldName).HasColumnName("input_ocr_file_field_name").HasMaxLength(100).HasDefaultValue(OcrSubmissionPolicy.DefaultFileFieldName).IsRequired();
+            entity.Property(x => x.InputOcrBearerToken).HasColumnName("input_ocr_bearer_token").HasMaxLength(2000);
+            entity.Property(x => x.UpdateMasterUrl).HasColumnName("update_master_url").HasMaxLength(500);
+            entity.Property(x => x.GetResultOcrUrl).HasColumnName("get_result_ocr_url").HasMaxLength(500);
+            entity.Property(x => x.FeedbackUrl).HasColumnName("feedback_url").HasMaxLength(500);
             entity.Property(x => x.CallbackUrl).HasColumnName("callback_url").HasMaxLength(500);
             entity.Property(x => x.InboundDirectory).HasColumnName("inbound_directory").HasMaxLength(500).IsRequired();
             entity.Property(x => x.ProcessingDirectory).HasColumnName("processing_directory").HasMaxLength(500).IsRequired();

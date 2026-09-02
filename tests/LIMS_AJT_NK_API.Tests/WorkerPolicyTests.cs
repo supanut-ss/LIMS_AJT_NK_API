@@ -159,7 +159,7 @@ public class WorkerPolicyTests
     }
 
     [Fact]
-    public async Task CreateContent_FileRouteOmitsBlankCallbackAndDefaultsFileField()
+    public async Task CreateContent_FileRouteRejectsBlankCallback()
     {
         var testDirectory = CreateTestDirectory();
         var filePath = Path.Combine(testDirectory, "coa.pdf");
@@ -170,16 +170,14 @@ public class WorkerPolicyTests
             var payload = CreatePayload(filePath);
             payload.CallbackUrl = " ";
 
-            using var content = Assert.IsType<MultipartFormDataContent>(
+            var error = Assert.Throws<InvalidOperationException>(() =>
                 OcrSubmissionPolicy.CreateContent(
                     OcrSubmissionPolicy.InputOcrFileApiName,
                     payload,
                     filePath,
                     null));
-            var parts = content.ToList();
 
-            Assert.DoesNotContain(parts, x => PartName(x) == "callback_url");
-            Assert.Single(parts, x => PartName(x) == "file");
+            Assert.Contains("callback_url", error.Message);
         }
         finally
         {
@@ -225,6 +223,202 @@ public class WorkerPolicyTests
         {
             Directory.Delete(testDirectory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task CreateRequest_FileRouteAddsBearerTokenAndV5FileField()
+    {
+        var testDirectory = CreateTestDirectory();
+        var filePath = Path.Combine(testDirectory, "coa.pdf");
+
+        try
+        {
+            await File.WriteAllBytesAsync(filePath, "%PDF-1.7"u8.ToArray());
+            var payload = CreatePayload(filePath);
+
+            using var request = OcrSubmissionPolicy.CreateRequest(
+                "http://dev-hippo.ztrus.net:6206/aji/input_ocr",
+                OcrSubmissionPolicy.InputOcrFileApiName,
+                payload,
+                filePath,
+                null,
+                " test-token ");
+
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(
+                "http://dev-hippo.ztrus.net:6206/aji/input_ocr",
+                request.RequestUri?.ToString());
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.Equal("test-token", request.Headers.Authorization?.Parameter);
+
+            var parts = Assert.IsType<MultipartFormDataContent>(request.Content).ToList();
+            Assert.Single(parts, x => PartName(x) == "files");
+        }
+        finally
+        {
+            Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CreateRequest_FileRouteRejectsMissingBearerToken()
+    {
+        var testDirectory = CreateTestDirectory();
+        var filePath = Path.Combine(testDirectory, "coa.pdf");
+
+        try
+        {
+            await File.WriteAllBytesAsync(filePath, "%PDF-1.7"u8.ToArray());
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                OcrSubmissionPolicy.CreateRequest(
+                    "http://dev-hippo.ztrus.net:6206/aji/input_ocr",
+                    OcrSubmissionPolicy.InputOcrFileApiName,
+                    CreatePayload(filePath),
+                    filePath,
+                    null,
+                    null));
+
+            Assert.Contains("input_ocr_bearer_token", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        "{\"statusCode\":201,\"jobs\":[{\"job_task_id\":\"job-1_1\"}]}",
+        "job-1_1")]
+    [InlineData("{\"statusCode\":201}", "job-1")]
+    [InlineData("not-json", "job-1")]
+    [InlineData(null, "job-1")]
+    public void ResolveAcceptedJobTaskId_UsesV5JobsResponseWhenAvailable(
+        string? responseBody,
+        string expected)
+    {
+        Assert.Equal(
+            expected,
+            OcrSubmissionPolicy.ResolveAcceptedJobTaskId("job-1", responseBody));
+    }
+
+    [Fact]
+    public async Task CreateMasterDataRequest_CreatesV5MultipartContractWithoutAuthorization()
+    {
+        var testDirectory = CreateTestDirectory();
+        var originalName = "Master Data.xlsx";
+        var prefixedName = $"20260901123456789_{Guid.NewGuid():N}_{originalName}";
+        var filePath = Path.Combine(testDirectory, prefixedName);
+        var expectedBytes = "xlsx-test"u8.ToArray();
+
+        try
+        {
+            await File.WriteAllBytesAsync(filePath, expectedBytes);
+
+            using var request = MasterDataSubmissionPolicy.CreateRequest(
+                "http://dev-hippo.ztrus.net:6206/aji/update_master_data",
+                " flow-1 ",
+                filePath);
+
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Null(request.Headers.Authorization);
+
+            var parts = Assert.IsType<MultipartFormDataContent>(request.Content).ToList();
+            Assert.Equal("flow-1", await ReadTextPartAsync(parts, "flow_id"));
+
+            var filePart = Assert.Single(
+                parts,
+                x => PartName(x) == MasterDataSubmissionPolicy.DefaultFileFieldName);
+            Assert.Equal(
+                MasterDataSubmissionPolicy.ExcelContentType,
+                filePart.Headers.ContentType?.MediaType);
+            Assert.Equal(originalName, filePart.Headers.ContentDisposition?.FileName?.Trim('"'));
+            Assert.Equal(expectedBytes, await filePart.ReadAsByteArrayAsync());
+        }
+        finally
+        {
+            Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CreateMasterDataRequest_RejectsNonXlsxFile()
+    {
+        var testDirectory = CreateTestDirectory();
+        var filePath = Path.Combine(testDirectory, "master.xls");
+
+        try
+        {
+            await File.WriteAllBytesAsync(filePath, "xls-test"u8.ToArray());
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                MasterDataSubmissionPolicy.CreateRequest(
+                    "http://dev-hippo.ztrus.net:6206/aji/update_master_data",
+                    "flow-1",
+                    filePath));
+
+            Assert.Contains(".xlsx", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(testDirectory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("{\"status\":\"success\"}", true)]
+    [InlineData("{\"status\":\" SUCCESS \"}", true)]
+    [InlineData("{\"status\":\"error\"}", false)]
+    [InlineData("{}", false)]
+    [InlineData("not-json", false)]
+    [InlineData(null, false)]
+    public void IsSuccessfulMasterDataResponse_RequiresSuccessStatus(
+        string? responseBody,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            MasterDataSubmissionPolicy.IsSuccessfulResponse(responseBody));
+    }
+
+    [Fact]
+    public async Task CreateGetResultRequest_MatchesV5ContractAndUsesBearerToken()
+    {
+        using var request = OcrResultQueryPolicy.CreateRequest(
+            "http://dev-hippo.ztrus.net:6206/aji/get_result_ocr",
+            " token-1 ",
+            " job-1_1 ");
+
+        Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+        Assert.Equal("token-1", request.Headers.Authorization?.Parameter);
+        using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        Assert.Equal("job-1_1", body.RootElement.GetProperty("job_task_id").GetString());
+    }
+
+    [Theory]
+    [InlineData("{\"summary\":{\"total\":1,\"processing\":0}}", true)]
+    [InlineData("{\"summary\":{\"total\":1,\"processing\":1}}", false)]
+    [InlineData("{\"summary\":{\"total\":0,\"processing\":0}}", false)]
+    [InlineData("{}", false)]
+    [InlineData("not-json", false)]
+    public void IsTerminalResponse_RequiresNonProcessingResult(string responseBody, bool expected)
+    {
+        Assert.Equal(expected, OcrResultQueryPolicy.IsTerminalResponse(responseBody));
+    }
+
+    [Fact]
+    public async Task CreateCallbackForwardRequest_ForwardsOriginalJsonWithoutAuthorization()
+    {
+        const string responseBody =
+            "{\"job_task_id\":\"job-1_1\",\"summary\":{\"total\":1,\"processing\":0},\"ocr_result\":[]}";
+        using var request = OcrResultQueryPolicy.CreateCallbackForwardRequest(
+            "https://lims.test/api/call_back",
+            responseBody);
+
+        Assert.Null(request.Headers.Authorization);
+        Assert.Equal(responseBody, await request.Content!.ReadAsStringAsync());
+        Assert.Equal("application/json", request.Content.Headers.ContentType?.MediaType);
     }
 
     private static InputOcrRequest CreatePayload(string filePath)

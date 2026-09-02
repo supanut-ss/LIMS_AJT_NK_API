@@ -7,7 +7,11 @@ public class InterfaceLimsOcrConfigApiEntity
     public string InputOcrUrl { get; set; } = string.Empty;
     public string? InputOcrFileUrl { get; set; }
     public string SubmissionMode { get; set; } = "path";
-    public string InputOcrFileFieldName { get; set; } = "file";
+    public string InputOcrFileFieldName { get; set; } = "files";
+    public string? InputOcrBearerToken { get; set; }
+    public string? UpdateMasterUrl { get; set; }
+    public string? GetResultOcrUrl { get; set; }
+    public string? FeedbackUrl { get; set; }
     public string? CallbackUrl { get; set; }
     public string InboundDirectory { get; set; } = string.Empty;
     public string ProcessingDirectory { get; set; } = string.Empty;

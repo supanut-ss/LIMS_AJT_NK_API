@@ -58,9 +58,20 @@ dotnet test .\tests\LIMS_AJT_NK_API.Tests\LIMS_AJT_NK_API.Tests.csproj
 `database\20260901_support_ocr_file_result_contract.sql` เพื่อเก็บ `summary`,
 result `status` และ `document_classification`
 
-ก่อนเปิดใช้ Worker เส้น `input_ocr_file` ให้รัน migration
-`database\20260901_add_input_ocr_file_worker_route.sql` แล้วตั้งค่า
-`submission_mode = 'file'` และ `input_ocr_file_url` ใน config row ที่ใช้งาน
+ก่อนเปิดใช้ Worker เส้น multipart `POST /aji/input_ocr` ให้รัน migration
+`database\20260901_add_input_ocr_file_worker_route.sql` และ
+`database\20260902_align_aji_input_ocr_v5.sql` ตามลำดับ แล้วตั้งค่า
+`submission_mode = 'file'`, `input_ocr_file_url`, `input_ocr_bearer_token`,
+`update_master_url`, `get_result_ocr_url`, `feedback_url`, `flow_id` และ callback URL
+ที่ Aji API เรียกถึงได้ใน config row ที่ใช้งาน โดย Worker จะส่ง PDF ไป OCR,
+ส่ง XLSX ไป `update_master_data` และ poll ผล OCR เป็น fallback เมื่อ push callback
+ยังไม่มาถึง
+
+Integration endpoints ฝั่งเรา:
+
+- `POST /api/aji/get_result_ocr`
+- `POST /api/aji/feedback`
+- `POST /callback_test`
 
 จากนั้นกำหนดตำแหน่ง `_Documents` จริงบน Host ให้ config row ที่ใช้งาน เช่น:
 

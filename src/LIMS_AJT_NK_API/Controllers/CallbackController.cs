@@ -77,6 +77,54 @@ public class CallbackController(
         return isDbHealthy ? Ok(response) : StatusCode(503, response);
     }
 
+    [HttpPost("~/callback_test")]
+    public async Task<IActionResult> CallbackTest(
+        [FromBody] JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        var requestPayload = payload.GetRawText();
+        string? jobTaskId = null;
+        if (payload.ValueKind == JsonValueKind.Object
+            && payload.TryGetProperty("job_task_id", out var jobTaskIdElement)
+            && jobTaskIdElement.ValueKind == JsonValueKind.String)
+        {
+            jobTaskId = jobTaskIdElement.GetString()?.Trim();
+        }
+
+        dbContext.InterfaceLimsOcrLogs.Add(new InterfaceLimsOcrLogEntity
+        {
+            LogId = Guid.NewGuid(),
+            ApiName = "callback_test",
+            RequestUrl = HttpContext.Request.Path,
+            JobTaskId = jobTaskId,
+            RequestPayload = requestPayload,
+            ResponseStatusCode = StatusCodes.Status200OK,
+            ResponsePayload = "{\"status\":\"success\"}",
+            IsSuccess = true,
+            SourceSystem = "callback_test",
+            WorkStatus = "completed_success",
+            AttemptCount = 1,
+            CompletedDate = DateTime.Now,
+            IsInterface = false,
+            CreateBy = "api",
+            CreateDate = DateTime.Now
+        });
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "callback_test received. JobTaskId={JobTaskId}, PayloadLength={PayloadLength}",
+            jobTaskId,
+            requestPayload.Length);
+
+        return Ok(new
+        {
+            status = "success",
+            message = "Callback payload received",
+            data = new { job_task_id = jobTaskId },
+            errors = (object?)null
+        });
+    }
+
     [HttpPost("call_back")]
     public async Task<IActionResult> ReceiveOcrResult(
         [FromBody] OcrCallbackRequest request,

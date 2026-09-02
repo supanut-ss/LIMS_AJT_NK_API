@@ -1,7 +1,8 @@
 # LIMS_AJT_NK_CallbackWorker
 
 Worker Service สำหรับเฝ้าดูโฟลเดอร์แล้วส่ง OCR ได้ 2 เส้นทางตาม config:
-`POST /input_ocr` แบบ JSON path หรือ `POST /input_ocr_file` แบบ multipart PDF
+`POST /input_ocr` แบบ JSON path เดิม หรือ `POST /aji/input_ocr` แบบ multipart PDF ตาม Aji API v5
+และส่งไฟล์ master data ไป `POST /aji/update_master_data` ตาม Aji API v5
 
 รองรับการรันเป็น Windows Service, UNC shared path, ตรวจว่าไฟล์เขียนเสร็จแล้ว,
 retry แบบ exponential backoff และ recovery งานที่ค้างสถานะ `sending`
@@ -9,7 +10,7 @@ retry แบบ exponential backoff และ recovery งานที่ค้�
 ## Folder Structure
 
 ```text
-1_Inbound/     # วางไฟล์เข้ามาที่นี่
+1_Inbound/     # วาง PDF สำหรับ OCR หรือ XLSX สำหรับ update master ที่นี่
 2_Processing/  # ไฟล์ที่กำลังประมวลผล
 3_Success/     # ยิง API ผ่านแล้ว
 4_Error/       # ยิง API ไม่ผ่าน หรือไฟล์พัง
@@ -22,10 +23,14 @@ Worker อ่านค่าจากตาราง `t_interface_lims_ocr_confi
 ถ้าตารางยังไม่มีข้อมูล ระบบจะ seed ค่าเริ่มต้นให้อัตโนมัติ:
 
 - `input_ocr_url = http://localhost:5117/input_ocr`
-- `input_ocr_file_url = http://localhost:5117/input_ocr_file`
-- `submission_mode = path`
-- `input_ocr_file_field_name = file`
-- `callback_url = http://localhost:5117/api/call_back`
+- `input_ocr_file_url = http://dev-hippo.ztrus.net:6206/aji/input_ocr`
+- `submission_mode = file`
+- `input_ocr_file_field_name = files`
+- `input_ocr_bearer_token = NULL` (ต้องกำหนด token จริงก่อนเริ่ม Worker)
+- `update_master_url = http://dev-hippo.ztrus.net:6206/aji/update_master_data`
+- `get_result_ocr_url = http://dev-hippo.ztrus.net:6206/aji/get_result_ocr`
+- `feedback_url = http://dev-hippo.ztrus.net:6206/aji/feedback`
+- `callback_url = NULL` (ต้องกำหนด URL ของ Callback Service ที่ Aji API เรียกถึงได้)
 - โฟลเดอร์ `1_Inbound`, `2_Processing`, `3_Success`, `4_Error`
 - `interval_seconds = 30`
 - `file_stable_seconds = 5`
@@ -34,9 +39,13 @@ Worker อ่านค่าจากตาราง `t_interface_lims_ocr_confi
 - `request_timeout_seconds = 60`
 
 - `input_ocr_url`: ปลายทาง `input_ocr`
-- `input_ocr_file_url`: ปลายทาง multipart `input_ocr_file`
-- `submission_mode`: `path` สำหรับ `input_ocr` หรือ `file` สำหรับ `input_ocr_file`
-- `input_ocr_file_field_name`: ชื่อ multipart field ของ PDF ค่าเริ่มต้น `file`
+- `input_ocr_file_url`: ปลายทาง multipart เช่น `/aji/input_ocr`
+- `submission_mode`: `path` สำหรับ JSON เดิม หรือ `file` สำหรับ multipart PDF
+- `input_ocr_file_field_name`: ชื่อ multipart field ของ PDF ค่าเริ่มต้น `files`
+- `input_ocr_bearer_token`: Bearer token สำหรับ Aji API; ระบบจะไม่เขียนค่านี้ลง request log
+- `update_master_url`: ปลายทางอัปโหลด master data; ปล่อยว่างเพื่อปิดการสแกน XLSX
+- `get_result_ocr_url`: ปลายทาง query ผล OCR; ปล่อยว่างเพื่อปิด fallback polling
+- `feedback_url`: ปลายทางส่งข้อมูลที่ human ตรวจแก้ ใช้โดย `POST /api/aji/feedback`
 - `callback_url`: callback URL ที่ส่งใน payload
 - `inbound_directory`: โฟลเดอร์รับไฟล์
 - `processing_directory`: โฟลเดอร์ระหว่างประมวลผล
@@ -72,16 +81,26 @@ SET inbound_directory = N'\\fileserver\LIMS_OCR\1_Inbound',
 WHERE config_id = @config_id;
 ```
 
-เปิดใช้เส้น upload PDF โดยรัน migration
-`database\20260901_add_input_ocr_file_worker_route.sql` แล้วตั้งค่า:
+เปิดใช้เส้น upload PDF v5 โดยรัน migration
+`database\20260901_add_input_ocr_file_worker_route.sql` และ
+`database\20260902_align_aji_input_ocr_v5.sql` ตามลำดับ แล้วตั้งค่า:
 
 ```sql
 UPDATE dbo.t_interface_lims_ocr_config_api
 SET submission_mode = N'file',
-    input_ocr_file_url = N'https://aji-ocr.example/input_ocr_file',
-    input_ocr_file_field_name = N'file'
+    input_ocr_file_url = N'http://dev-hippo.ztrus.net:6206/aji/input_ocr',
+    input_ocr_file_field_name = N'files',
+    input_ocr_bearer_token = N'<REAL_BEARER_TOKEN>',
+    update_master_url = N'http://dev-hippo.ztrus.net:6206/aji/update_master_data',
+    get_result_ocr_url = N'http://dev-hippo.ztrus.net:6206/aji/get_result_ocr',
+    feedback_url = N'http://dev-hippo.ztrus.net:6206/aji/feedback',
+    flow_id = N'6a5efa97abaf97614454562a',
+    callback_url = N'https://<LIMS-HOST>/api/call_back'
 WHERE config_id = @config_id;
 ```
+
+ห้ามเก็บ token จริงไว้ใน source control และ `callback_url` ต้องเป็น URL ที่ Aji API
+เรียกกลับถึงได้ ไม่ใช่ `localhost` ของเครื่อง Aji
 
 เปลี่ยนกลับเส้นเดิมได้ด้วย `submission_mode = N'path'` งานสถานะ `sending`
 จะ recover ด้วย route และ URL ที่บันทึกไว้ใน log ตอนสร้างงาน ไม่เปลี่ยนตาม config ใหม่
@@ -147,7 +166,14 @@ sc.exe start LimsAjtNkOcrWorker
 
 Worker จะสแกนไฟล์ `.pdf` ใน `1_Inbound` แล้ว move ไป `2_Processing` ก่อนส่ง
 ตาม `submission_mode`; เส้น `file` ส่ง multipart fields `flow_id`, `job_task_id`,
-`callback_url` และ PDF field ตาม `input_ocr_file_field_name`
+`callback_url` และ PDF field ตาม `input_ocr_file_field_name` พร้อม Bearer token
+เมื่อ Aji API คืน `jobs[].job_task_id` เช่น `<submitted-id>_1` Worker จะบันทึก ID
+ดังกล่าวเพื่อจับคู่กับ `POST /api/call_back`
+
+ไฟล์ `.xlsx` ใน `1_Inbound` จะถูกส่งไป `update_master_url` ด้วย multipart fields
+`flow_id` และ `files` โดยเส้นนี้ไม่ส่ง Authorization ตาม contract v5 เมื่อ response
+เป็น HTTP 2xx และ JSON มี `status: "success"` ไฟล์จะย้ายไป `3_Success`; กรณีอื่น
+จะ retry เฉพาะ timeout, HTTP 408/429/5xx แล้วจึงย้ายไป `4_Error`
 
 สถานะหลักใน `t_interface_lims_ocr_log`:
 
@@ -156,3 +182,22 @@ Worker จะสแกนไฟล์ `.pdf` ใน `1_Inbound` แล้ว mov
 - `send_error`: ส่งไม่สำเร็จหลัง retry และย้ายไป Error
 - `completed_success`: callback และ interface สำเร็จ ย้ายไป Success
 - `completed_error`: callback/interface ไม่สำเร็จ ย้ายไป Error
+
+สำหรับ `update_master_data` จะเปลี่ยนจาก `sending` เป็น `completed_success` ทันทีเมื่อ
+API สำเร็จ เพราะเส้นนี้ไม่มี callback
+
+## Get result, feedback และ callback test
+
+Worker จะ poll `get_result_ocr_url` สำหรับงาน OCR สถานะ `submitted` ที่ยังไม่มี
+callback โดยส่ง Bearer token เดียวกับ `input_ocr`. เมื่อ `summary.total > 0` และ
+`summary.processing = 0` จะ forward JSON เดิมไป `callback_url`. ถ้า push callback
+มาถึงก่อน Worker จะไม่ poll ซ้ำ
+
+API ของเรามี proxy สำหรับเรียก Aji โดยไม่ต้องกระจาย URL/config ไปยัง frontend:
+
+- `POST /api/aji/get_result_ocr` body `{ "job_task_id": "..." }`
+- `POST /api/aji/feedback` body `{ "job_task_id": "...", "ocr_result": {...} }`
+- `POST /callback_test` รับ JSON ใด ๆ และเก็บ raw payload ใน `t_interface_lims_ocr_log`
+
+เส้น `get_result_ocr` ใช้ Bearer token ตาม contract v5 ส่วน `feedback` และ
+`callback_test` ไม่ใช้ Authorization

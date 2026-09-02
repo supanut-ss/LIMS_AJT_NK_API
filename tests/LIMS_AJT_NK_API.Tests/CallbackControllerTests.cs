@@ -2,6 +2,7 @@ using System.Text.Json;
 using LIMS_AJT_NK_API.Controllers;
 using LIMS_AJT_NK_API.Models;
 using LIMS_AJT_NK_API.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -10,6 +11,31 @@ namespace LIMS_AJT_NK_API.Tests;
 
 public class CallbackControllerTests
 {
+    [Fact]
+    public async Task CallbackTest_AcceptsAnyJsonAndPersistsRawPayload()
+    {
+        await using var database = await TestDatabase.CreateAsync();
+        var controller = CreateController(
+            database.Context,
+            new StubInterfaceService(new OcrCallbackInterfaceSummary()));
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext()
+        };
+        controller.HttpContext.Request.Path = "/callback_test";
+        using var json = JsonDocument.Parse("{\"ping\":\"test\"}");
+
+        var result = await controller.CallbackTest(
+            json.RootElement.Clone(),
+            CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        var log = await database.Context.InterfaceLimsOcrLogs.SingleAsync();
+        Assert.Equal("callback_test", log.ApiName);
+        Assert.Equal("{\"ping\":\"test\"}", log.RequestPayload);
+        Assert.True(log.IsSuccess);
+    }
+
     [Fact]
     public async Task ReceiveOcrResult_AcceptsActualFileIdPayloadAndPersistsNormalizedValues()
     {
