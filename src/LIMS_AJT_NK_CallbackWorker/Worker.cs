@@ -37,7 +37,6 @@ public class Worker(
                     EnsureDirectories(config);
                     await RecoverSendingJobsAsync(client, config, stoppingToken);
                     await RecoverSendingMasterDataJobsAsync(client, config, stoppingToken);
-                    await PollSubmittedOcrJobsAsync(client, config, stoppingToken);
                     await FinalizeCompletedJobsAsync(config, stoppingToken);
                     await ProcessInboundFolderAsync(client, config, stoppingToken);
                     await ProcessMasterDataInboundFolderAsync(client, config, stoppingToken);
@@ -768,119 +767,6 @@ public class Worker(
             lastStatusCode,
             lastResponseBody,
             lastError ?? "update_master_data failed");
-    }
-
-    private async Task PollSubmittedOcrJobsAsync(
-        HttpClient client,
-        LimsOcrConfigApiEntity config,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(config.GetResultOcrUrl))
-        {
-            return;
-        }
-
-        var pendingJobs = await workerDbContext.InterfaceLimsOcrLogs
-            .AsNoTracking()
-            .Where(x => (x.ApiName == OcrSubmissionPolicy.InputOcrApiName
-                    || x.ApiName == OcrSubmissionPolicy.InputOcrFileApiName)
-                && x.WorkStatus == "submitted"
-                && x.JobTaskId != null)
-            .OrderBy(x => x.CreateDate)
-            .ToListAsync(cancellationToken);
-
-        foreach (var job in pendingJobs)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var jobTaskId = job.JobTaskId!;
-
-            var callbackAlreadyReceived = await workerDbContext.InterfaceLimsOcrLogs
-                .AsNoTracking()
-                .AnyAsync(
-                    x => x.ApiName == "call_back" && x.JobTaskId == jobTaskId,
-                    cancellationToken);
-            if (callbackAlreadyReceived)
-            {
-                continue;
-            }
-
-            try
-            {
-                using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                var timeoutSeconds = Math.Clamp(
-                    config.RequestTimeoutSeconds <= 0 ? 60 : config.RequestTimeoutSeconds,
-                    1,
-                    600);
-                timeoutSource.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-
-                using var resultRequest = OcrResultQueryPolicy.CreateRequest(
-                    config.GetResultOcrUrl,
-                    config.InputOcrBearerToken ?? string.Empty,
-                    jobTaskId);
-                var requestPayload = await resultRequest.Content!.ReadAsStringAsync(timeoutSource.Token);
-                using var resultResponse = await client.SendAsync(resultRequest, timeoutSource.Token);
-                var resultBody = await resultResponse.Content.ReadAsStringAsync(timeoutSource.Token);
-
-                if (!resultResponse.IsSuccessStatusCode
-                    || !OcrResultQueryPolicy.IsTerminalResponse(resultBody))
-                {
-                    continue;
-                }
-
-                using var callbackRequest = OcrResultQueryPolicy.CreateCallbackForwardRequest(
-                    config.CallbackUrl ?? string.Empty,
-                    resultBody);
-                using var callbackTimeoutSource =
-                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                callbackTimeoutSource.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-                using var callbackResponse = await client.SendAsync(
-                    callbackRequest,
-                    callbackTimeoutSource.Token);
-                if (!callbackResponse.IsSuccessStatusCode)
-                {
-                    logger.LogWarning(
-                        "Unable to forward terminal OCR result to callback service. JobTaskId={JobTaskId}, Status={StatusCode}",
-                        jobTaskId,
-                        (int)callbackResponse.StatusCode);
-                    continue;
-                }
-
-                workerDbContext.InterfaceLimsOcrLogs.Add(new InterfaceLimsOcrLogEntity
-                {
-                    LogId = Guid.NewGuid(),
-                    ApiName = OcrResultQueryPolicy.ApiName,
-                    RequestUrl = config.GetResultOcrUrl.Trim(),
-                    JobTaskId = jobTaskId,
-                    RequestPayload = requestPayload,
-                    ResponseStatusCode = (int)resultResponse.StatusCode,
-                    ResponsePayload = resultBody,
-                    IsSuccess = true,
-                    SourceSystem = "worker_poll",
-                    WorkStatus = "callback_forwarded",
-                    AttemptCount = 1,
-                    CompletedDate = DateTime.Now,
-                    IsInterface = true,
-                    CreateBy = "worker",
-                    CreateDate = DateTime.Now
-                });
-                await workerDbContext.SaveChangesAsync(cancellationToken);
-
-                logger.LogInformation(
-                    "Terminal OCR result forwarded to callback service. JobTaskId={JobTaskId}",
-                    jobTaskId);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex,
-                    "Unable to poll or forward OCR result. JobTaskId={JobTaskId}",
-                    jobTaskId);
-            }
-        }
     }
 
     private async Task FinalizeCompletedJobsAsync(
