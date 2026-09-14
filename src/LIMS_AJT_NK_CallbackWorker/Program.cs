@@ -8,7 +8,9 @@ builder.Services.AddWindowsService(options =>
     options.ServiceName = "LIMS AJT NK OCR Worker";
 });
 builder.Services.AddDbContext<WorkerDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+        options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")),
+    ServiceLifetime.Singleton,
+    ServiceLifetime.Singleton);
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<Worker>();
 
