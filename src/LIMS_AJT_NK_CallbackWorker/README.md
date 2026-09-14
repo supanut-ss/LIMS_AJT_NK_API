@@ -44,7 +44,7 @@ Worker อ่านค่าจากตาราง `t_interface_lims_ocr_confi
 - `input_ocr_file_field_name`: ชื่อ multipart field ของ PDF ค่าเริ่มต้น `files`
 - `input_ocr_bearer_token`: Bearer token สำหรับ Aji API; ระบบจะไม่เขียนค่านี้ลง request log
 - `update_master_url`: ปลายทางอัปโหลด master data; ปล่อยว่างเพื่อปิดการสแกน XLSX
-- `get_result_ocr_url`: ปลายทาง query ผล OCR; ปล่อยว่างเพื่อปิด fallback polling
+- `get_result_ocr_url`: ปลายทาง query ผล OCR ใช้โดย proxy `POST /api/aji/get_result_ocr` เท่านั้น worker ไม่ poll เส้นนี้เองแล้ว
 - `feedback_url`: ปลายทางส่งข้อมูลที่ human ตรวจแก้ ใช้โดย `POST /api/aji/feedback`
 - `callback_url`: callback URL ที่ส่งใน payload
 - `inbound_directory`: โฟลเดอร์รับไฟล์
@@ -188,10 +188,9 @@ API สำเร็จ เพราะเส้นนี้ไม่มี callb
 
 ## Get result, feedback และ callback test
 
-Worker จะ poll `get_result_ocr_url` สำหรับงาน OCR สถานะ `submitted` ที่ยังไม่มี
-callback โดยส่ง Bearer token เดียวกับ `input_ocr`. เมื่อ `summary.total > 0` และ
-`summary.processing = 0` จะ forward JSON เดิมไป `callback_url`. ถ้า push callback
-มาถึงก่อน Worker จะไม่ poll ซ้ำ
+Worker ไม่ poll `get_result_ocr_url` เองแล้ว งาน OCR สถานะ `submitted` จะย้ายไป
+`3_Success`/`4_Error` ก็ต่อเมื่อมี `POST /api/call_back` จาก Aji API ยิงเข้ามาจริง
+เท่านั้น ถ้า callback ไม่มาไฟล์จะค้างสถานะ `submitted` ใน `2_Processing`
 
 API ของเรามี proxy สำหรับเรียก Aji โดยไม่ต้องกระจาย URL/config ไปยัง frontend:
 
