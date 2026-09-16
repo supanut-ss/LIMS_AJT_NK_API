@@ -32,6 +32,7 @@ public class WorkerDbContext(DbContextOptions<WorkerDbContext> options) : DbCont
             entity.Property(x => x.ProcessingDirectory).HasColumnName("processing_directory").HasMaxLength(500).IsRequired();
             entity.Property(x => x.SuccessDirectory).HasColumnName("success_directory").HasMaxLength(500).IsRequired();
             entity.Property(x => x.ErrorDirectory).HasColumnName("error_directory").HasMaxLength(500).IsRequired();
+            entity.Property(x => x.InvalidTypeDirectory).HasColumnName("invalid_type_directory").HasMaxLength(500).HasDefaultValue("5_InvalidType").IsRequired();
             entity.Property(x => x.DocumentHostDirectory).HasColumnName("document_host_directory").HasMaxLength(500);
             entity.Property(x => x.DocumentWebPath).HasColumnName("document_web_path").HasMaxLength(500);
             entity.Property(x => x.DocumentGroup).HasColumnName("document_group").HasMaxLength(64);

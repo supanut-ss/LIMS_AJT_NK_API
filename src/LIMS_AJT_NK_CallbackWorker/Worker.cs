@@ -11,6 +11,9 @@ public class Worker(
     IHttpClientFactory httpClientFactory,
     WorkerDbContext workerDbContext) : BackgroundService
 {
+    private static readonly string[] SupportedInboundExtensions = [".pdf", ".xlsx"];
+
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var client = httpClientFactory.CreateClient();
@@ -40,6 +43,7 @@ public class Worker(
                     await FinalizeCompletedJobsAsync(config, stoppingToken);
                     await ProcessInboundFolderAsync(client, config, stoppingToken);
                     await ProcessMasterDataInboundFolderAsync(client, config, stoppingToken);
+                    ProcessInvalidTypeFiles(config, stoppingToken);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -248,6 +252,51 @@ public class Worker(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to process master data file. File={File}", inboundFile);
+            }
+        }
+    }
+
+    private void ProcessInvalidTypeFiles(
+        LimsOcrConfigApiEntity config,
+        CancellationToken stoppingToken)
+    {
+        if (!Directory.Exists(config.InboundDirectory))
+        {
+            return;
+        }
+
+        var invalidFiles = Directory
+            .EnumerateFiles(config.InboundDirectory, "*.*", SearchOption.TopDirectoryOnly)
+            .Where(file => !SupportedInboundExtensions.Contains(
+                Path.GetExtension(file),
+                StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var invalidFile in invalidFiles)
+        {
+            stoppingToken.ThrowIfCancellationRequested();
+
+            if (!SharedFilePolicy.IsReady(invalidFile, config.FileStableSeconds, DateTime.UtcNow))
+            {
+                continue;
+            }
+
+            var originalFileName = Path.GetFileName(invalidFile);
+
+            try
+            {
+                MoveToFolder(invalidFile, config.InvalidTypeDirectory, originalFileName);
+                logger.LogWarning(
+                    "Moved unsupported file type out of inbound folder. File={File}",
+                    originalFileName);
+            }
+            catch (IOException ex)
+            {
+                logger.LogInformation(ex, "Invalid type file was already claimed or became unavailable. File={File}", invalidFile);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to move unsupported file type. File={File}", invalidFile);
             }
         }
     }
@@ -913,6 +962,7 @@ public class Worker(
         Directory.CreateDirectory(config.ProcessingDirectory);
         Directory.CreateDirectory(config.SuccessDirectory);
         Directory.CreateDirectory(config.ErrorDirectory);
+        Directory.CreateDirectory(config.InvalidTypeDirectory);
     }
 
     private static string MoveToFolder(

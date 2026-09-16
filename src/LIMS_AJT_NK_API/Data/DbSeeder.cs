@@ -30,6 +30,7 @@ public static class DbSeeder
             ProcessingDirectory = "2_Processing",
             SuccessDirectory = "3_Success",
             ErrorDirectory = "4_Error",
+            InvalidTypeDirectory = "5_InvalidType",
             DocumentHostDirectory = null,
             DocumentWebPath = "../_Documents",
             DocumentGroup = "QC_COA",

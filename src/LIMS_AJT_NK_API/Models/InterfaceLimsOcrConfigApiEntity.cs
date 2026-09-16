@@ -17,6 +17,7 @@ public class InterfaceLimsOcrConfigApiEntity
     public string ProcessingDirectory { get; set; } = string.Empty;
     public string SuccessDirectory { get; set; } = string.Empty;
     public string ErrorDirectory { get; set; } = string.Empty;
+    public string InvalidTypeDirectory { get; set; } = string.Empty;
     public string? DocumentHostDirectory { get; set; }
     public string? DocumentWebPath { get; set; }
     public string? DocumentGroup { get; set; }
