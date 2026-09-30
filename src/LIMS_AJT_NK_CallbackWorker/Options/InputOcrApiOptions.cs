@@ -9,7 +9,7 @@ public class InputOcrApiOptions
     public int IntervalSeconds { get; set; } = 30;
 
     public string? FlowId { get; set; }
-    public string CallbackUrl { get; set; } = "http://localhost:5117/api/call_back";
+    public string CallbackUrl { get; set; } = "http://192.168.1.135:5117/api/call_back";
 
     public string InboundDirectory { get; set; } = "1_Inbound";
     public string ProcessingDirectory { get; set; } = "2_Processing";
