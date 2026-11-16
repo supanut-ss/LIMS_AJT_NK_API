@@ -383,6 +383,7 @@ public class OcrCallbackInterfaceServiceTests
         {
             ReceiptDetailId = receiptDetailId,
             ItemMasterId = itemMasterId,
+            ItemRmName = "Sample Product",
             SupplierName = "Sample Supplier",
             LotNumber = "LOT-001",
             MfgDate = new DateTime(2026, 1, 1),
@@ -498,7 +499,7 @@ public class OcrCallbackInterfaceServiceTests
             TrackingStatus = trackingStatus,
             ProductName = productName,
             SupplierName = supplierName,
-            LotNumber = lotNumber,
+            InternalLot = lotNumber,
             MfgDate = new DateTime(2026, 1, 1),
             CreateBy = "test",
             CreateDate = DateTime.Now

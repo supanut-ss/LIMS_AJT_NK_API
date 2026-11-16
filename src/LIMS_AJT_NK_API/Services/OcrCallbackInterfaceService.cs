@@ -342,23 +342,20 @@ public sealed class OcrCallbackInterfaceService(
 
         var productName = result.ProductName!.Trim();
         var supplierName = result.SupplierName!.Trim();
-        var lotNumber = !string.IsNullOrWhiteSpace(result.LotNumber)
-            ? result.LotNumber.Trim()
-            : result.InternalLot!.Trim();
+        // Only the OCR internal lot is matched against the inbound lot number.
+        var internalLot = result.InternalLot!.Trim();
         var mfgDate = result.MfgDate!.Value.Date;
 
-        var inboundCandidates = await (
-                from inboundRow in dbContext.LimsInboundReceives.AsNoTracking()
-                join item in dbContext.WmsItems.AsNoTracking()
-                    on inboundRow.ItemMasterId equals (Guid?)item.ItemMasterId
-                where item.Description != null
-                    && inboundRow.SupplierName != null
-                    && inboundRow.LotNumber != null
-                    && item.Description.Trim() == productName
-                    && inboundRow.SupplierName.Trim() == supplierName
-                    && inboundRow.LotNumber.Trim() == lotNumber
-                    && inboundRow.MfgDate == mfgDate
-                select inboundRow)
+        // OCR product name is matched against the inbound RM name (item_rm_name).
+        var inboundCandidates = await dbContext.LimsInboundReceives
+            .AsNoTracking()
+            .Where(x => x.ItemRmName != null
+                && x.SupplierName != null
+                && x.LotNumber != null
+                && x.ItemRmName.Trim() == productName
+                && x.SupplierName.Trim() == supplierName
+                && x.LotNumber.Trim() == internalLot
+                && x.MfgDate == mfgDate)
             .Take(2)
             .ToListAsync(cancellationToken);
 
@@ -615,9 +612,9 @@ public sealed class OcrCallbackInterfaceService(
             return "supplier_name_missing";
         }
 
-        if (string.IsNullOrWhiteSpace(result.LotNumber) && string.IsNullOrWhiteSpace(result.InternalLot))
+        if (string.IsNullOrWhiteSpace(result.InternalLot))
         {
-            return "lot_number_missing";
+            return "internal_lot_missing";
         }
 
         return result.MfgDate is null ? "mfg_date_missing" : null;
