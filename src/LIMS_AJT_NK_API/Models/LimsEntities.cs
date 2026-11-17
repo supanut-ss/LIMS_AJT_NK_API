@@ -19,6 +19,16 @@ public class WmsItemEntity
     public string? Description { get; set; }
 }
 
+public class WmsItemRmEntity
+{
+    public Guid ItemRmId { get; set; }
+    public Guid? ItemMasterId { get; set; }
+    public Guid? SupplierId { get; set; }
+    public string? ItemRmCode { get; set; }
+    public string? ItemRmName { get; set; }
+    public string? IsActive { get; set; }
+}
+
 public class LimsCoaParameterEntity
 {
     public Guid CoaParameterId { get; set; }

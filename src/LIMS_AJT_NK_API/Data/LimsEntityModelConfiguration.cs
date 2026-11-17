@@ -32,6 +32,23 @@ internal static class LimsEntityModelConfiguration
             entity.Property(x => x.Description).HasColumnName("description").HasMaxLength(200);
         });
 
+        // Only mapped so TestDatabase's EnsureCreatedAsync creates this table too:
+        // dbo.usp_ocr_callback_remap reads it directly (not through EF) to
+        // auto-create a QAQC scan on first match, mirroring
+        // QAQCPostFileToServer.ashx.cs in WMS_NEW.
+        modelBuilder.Entity<WmsItemRmEntity>(entity =>
+        {
+            entity.ToTable("t_wms_item_rm");
+            entity.HasKey(x => x.ItemRmId);
+
+            entity.Property(x => x.ItemRmId).HasColumnName("item_rm_id");
+            entity.Property(x => x.ItemMasterId).HasColumnName("item_master_id");
+            entity.Property(x => x.SupplierId).HasColumnName("supplier_id");
+            entity.Property(x => x.ItemRmCode).HasColumnName("item_rm_code").HasMaxLength(50);
+            entity.Property(x => x.ItemRmName).HasColumnName("item_rm_name").HasMaxLength(500);
+            entity.Property(x => x.IsActive).HasColumnName("is_active").HasMaxLength(3);
+        });
+
         modelBuilder.Entity<LimsCoaParameterEntity>(entity =>
         {
             entity.ToTable("t_lims_coa_parameter");

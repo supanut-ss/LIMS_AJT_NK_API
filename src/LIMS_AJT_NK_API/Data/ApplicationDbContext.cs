@@ -17,6 +17,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<LimsQaqcCoaParameterTestEntity> LimsQaqcCoaParameterTests => Set<LimsQaqcCoaParameterTestEntity>();
     public DbSet<LimsQaqcCoaParameterTransactionEntity> LimsQaqcCoaParameterTransactions => Set<LimsQaqcCoaParameterTransactionEntity>();
     public DbSet<WmsItemEntity> WmsItems => Set<WmsItemEntity>();
+    public DbSet<WmsItemRmEntity> WmsItemRms => Set<WmsItemRmEntity>();
     public DbSet<LimsCoaParameterEntity> LimsCoaParameters => Set<LimsCoaParameterEntity>();
     public DbSet<LimsManageCoaParameterEntity> LimsManageCoaParameters => Set<LimsManageCoaParameterEntity>();
 

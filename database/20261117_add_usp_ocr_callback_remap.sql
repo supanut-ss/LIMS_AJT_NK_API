@@ -192,6 +192,54 @@ BEGIN
                         WHERE [receipt_detail_id] = @receipt_detail_id
                     ) AS scans;
 
+                    -- Mirror QAQCPostFileToServer.ashx.cs: when a COA document is
+                    -- attached for a receipt with no QAQC scan yet, it creates one
+                    -- from the inbound receive + the active t_wms_item_rm row for
+                    -- that item/supplier. Remapping should be able to do the same,
+                    -- instead of failing with qaqc_scan_not_found, so a callback
+                    -- that arrives before any manual attachment can still match.
+                    IF @scan_count = 0
+                    BEGIN
+                        DECLARE @rm_found BIT = 0;
+                        DECLARE @new_scan_item_rm_code VARCHAR(50) = NULL;
+                        DECLARE @new_scan_item_rm_name VARCHAR(50) = NULL;
+                        DECLARE @inbound_item_master_id UNIQUEIDENTIFIER;
+                        DECLARE @inbound_supplier_id UNIQUEIDENTIFIER;
+                        DECLARE @inbound_item_number VARCHAR(50);
+                        DECLARE @inbound_lot_number VARCHAR(50);
+                        DECLARE @inbound_expiry_date VARCHAR(8);
+                        DECLARE @inbound_scan_mfg_date DATE;
+
+                        SELECT
+                            @inbound_item_master_id = [item_master_id],
+                            @inbound_supplier_id = [supplier_id],
+                            @inbound_item_number = [item_number],
+                            @inbound_lot_number = [lot_number],
+                            @inbound_expiry_date = [expiry_date],
+                            @inbound_scan_mfg_date = [mfg_date]
+                        FROM [dbo].[t_lims_inbound_receive]
+                        WHERE [receipt_detail_id] = @receipt_detail_id;
+
+                        SELECT TOP (1)
+                            @new_scan_item_rm_code = [item_rm_code],
+                            @new_scan_item_rm_name = [item_rm_name],
+                            @rm_found = 1
+                        FROM [dbo].[t_wms_item_rm]
+                        WHERE [item_master_id] = @inbound_item_master_id
+                          AND [supplier_id] = @inbound_supplier_id
+                          AND [is_active] = 'YES';
+
+                        IF @rm_found = 1
+                        BEGIN
+                            INSERT INTO [dbo].[t_lims_qaqc_scan]
+                                ([qaqc_scan_id], [receipt_detail_id], [item_number], [item_rm_code], [item_rm_name], [lot_number], [expiry_date], [mfg_date])
+                            VALUES
+                                (NEWID(), @receipt_detail_id, @inbound_item_number, @new_scan_item_rm_code, @new_scan_item_rm_name, @inbound_lot_number, @inbound_expiry_date, @inbound_scan_mfg_date);
+
+                            SET @scan_count = 1;
+                        END
+                    END
+
                     IF @scan_count = 0
                         SET @page_fail_reason = 'qaqc_scan_not_found';
                     ELSE IF @scan_count > 1
