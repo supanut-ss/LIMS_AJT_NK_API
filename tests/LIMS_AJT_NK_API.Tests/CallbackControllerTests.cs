@@ -575,6 +575,7 @@ public class CallbackControllerTests
         {
             ReceiptDetailId = receiptDetailId,
             ItemMasterId = itemMasterId,
+            ItemRmName = "Refined salt 50 kg.",
             SupplierName = "K.C. Salt International Co.,Ltd",
             LotNumber = "26KC052501",
             MfgDate = new DateTime(2026, 5, 8),

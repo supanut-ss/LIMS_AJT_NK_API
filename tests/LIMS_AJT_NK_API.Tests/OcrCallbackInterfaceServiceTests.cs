@@ -81,6 +81,7 @@ public class OcrCallbackInterfaceServiceTests
         {
             ReceiptDetailId = Guid.NewGuid(),
             ItemMasterId = original.ItemMasterId,
+            ItemRmName = original.ItemRmName,
             SupplierName = original.SupplierName,
             LotNumber = original.LotNumber,
             MfgDate = original.MfgDate,
