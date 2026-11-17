@@ -382,45 +382,6 @@ public class WorkerPolicyTests
             MasterDataSubmissionPolicy.IsSuccessfulResponse(responseBody));
     }
 
-    [Fact]
-    public async Task CreateGetResultRequest_MatchesV5ContractAndUsesBearerToken()
-    {
-        using var request = OcrResultQueryPolicy.CreateRequest(
-            "http://dev-hippo.ztrus.net:6206/aji/get_result_ocr",
-            " token-1 ",
-            " job-1_1 ");
-
-        Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
-        Assert.Equal("token-1", request.Headers.Authorization?.Parameter);
-        using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
-        Assert.Equal("job-1_1", body.RootElement.GetProperty("job_task_id").GetString());
-    }
-
-    [Theory]
-    [InlineData("{\"summary\":{\"total\":1,\"processing\":0}}", true)]
-    [InlineData("{\"summary\":{\"total\":1,\"processing\":1}}", false)]
-    [InlineData("{\"summary\":{\"total\":0,\"processing\":0}}", false)]
-    [InlineData("{}", false)]
-    [InlineData("not-json", false)]
-    public void IsTerminalResponse_RequiresNonProcessingResult(string responseBody, bool expected)
-    {
-        Assert.Equal(expected, OcrResultQueryPolicy.IsTerminalResponse(responseBody));
-    }
-
-    [Fact]
-    public async Task CreateCallbackForwardRequest_ForwardsOriginalJsonWithoutAuthorization()
-    {
-        const string responseBody =
-            "{\"job_task_id\":\"job-1_1\",\"summary\":{\"total\":1,\"processing\":0},\"ocr_result\":[]}";
-        using var request = OcrResultQueryPolicy.CreateCallbackForwardRequest(
-            "https://lims.test/api/call_back",
-            responseBody);
-
-        Assert.Null(request.Headers.Authorization);
-        Assert.Equal(responseBody, await request.Content!.ReadAsStringAsync());
-        Assert.Equal("application/json", request.Content.Headers.ContentType?.MediaType);
-    }
-
     private static InputOcrRequest CreatePayload(string filePath)
     {
         return new InputOcrRequest

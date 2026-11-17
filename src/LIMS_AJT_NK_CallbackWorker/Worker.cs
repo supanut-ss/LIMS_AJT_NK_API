@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using LIMS_AJT_NK_CallbackWorker.Data;
 using LIMS_AJT_NK_CallbackWorker.Models;
+using LIMS_AJT_NK_CallbackWorker.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace LIMS_AJT_NK_CallbackWorker;
@@ -9,7 +10,8 @@ namespace LIMS_AJT_NK_CallbackWorker;
 public class Worker(
     ILogger<Worker> logger,
     IHttpClientFactory httpClientFactory,
-    WorkerDbContext workerDbContext) : BackgroundService
+    WorkerDbContext workerDbContext,
+    IOcrRemapService ocrRemapService) : BackgroundService
 {
     private static readonly string[] SupportedInboundExtensions = [".pdf", ".xlsx"];
 
@@ -75,6 +77,42 @@ public class Worker(
             .FirstOrDefaultAsync(stoppingToken);
 
         return TimeSpan.FromSeconds(intervalSeconds <= 0 ? 30 : intervalSeconds);
+    }
+
+    // Prepared, not wired into ExecuteAsync yet: remaps every not_matched
+    // callback by calling dbo.usp_ocr_callback_remap directly (via
+    // IOcrRemapService), the same procedure LIMS_AJT_NK_API's call_back flow
+    // and WMS_NEW's Review COA "Remapping" button use. Call this from
+    // ExecuteAsync's loop once an automatic retry schedule is decided.
+    private async Task RetryNotMatchedCallbacksAsync(CancellationToken stoppingToken)
+    {
+        var callbackIds = await workerDbContext.InterfaceLimsOcrCallbacks
+            .AsNoTracking()
+            .Where(x => x.InterfaceStatus == "not_matched")
+            .Select(x => x.CallbackId)
+            .ToListAsync(stoppingToken);
+
+        foreach (var callbackId in callbackIds)
+        {
+            stoppingToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                var result = await ocrRemapService.RemapAsync(callbackId, forceReprocess: true, stoppingToken);
+                logger.LogInformation(
+                    "Retried OCR callback {CallbackId}. Replay={IsReplay}",
+                    callbackId,
+                    result.IsReplay);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to retry OCR callback {CallbackId}.", callbackId);
+            }
+        }
     }
 
     private async Task ProcessInboundFolderAsync(

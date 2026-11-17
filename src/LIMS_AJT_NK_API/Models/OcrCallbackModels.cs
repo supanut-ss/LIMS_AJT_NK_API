@@ -18,6 +18,12 @@ public class OcrCallbackRequest
     public OcrCallbackSourceSummaryRequest? Summary { get; set; }
 }
 
+public class OcrRemapRequest
+{
+    [JsonPropertyName("result_id")]
+    public Guid ResultId { get; set; }
+}
+
 public class OcrCallbackSourceSummaryRequest
 {
     [JsonPropertyName("total")]

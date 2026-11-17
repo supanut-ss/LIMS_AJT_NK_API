@@ -2,31 +2,42 @@ using System.Data;
 using System.Text.Json;
 using LIMS_AJT_NK_API.Data;
 using LIMS_AJT_NK_API.Models;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace LIMS_AJT_NK_API.Services;
 
 public interface IOcrCallbackInterfaceService
 {
-    Task<OcrCallbackInterfaceSummary> ProcessAsync(Guid callbackId, CancellationToken cancellationToken = default);
+    Task<OcrCallbackInterfaceSummary> ProcessAsync(
+        Guid callbackId,
+        CancellationToken cancellationToken = default,
+        bool forceReprocess = false);
 }
 
+// The inbound/QAQC matching and parameter-update logic that used to live here in
+// C# now lives in dbo.usp_ocr_callback_remap (see
+// database/20261117_add_usp_ocr_callback_remap.sql), so WMS_NEW (Web) and
+// LIMS_AJT_NK_CallbackWorker (Worker) can remap a callback directly against the
+// shared DB without an HTTP call into this API. This service's job is now only
+// to invoke that procedure and, for this API's own call_back flow, store the
+// matched COA document on disk - something the stored procedure cannot do.
 public sealed class OcrCallbackInterfaceService(
     ApplicationDbContext dbContext,
     ILogger<OcrCallbackInterfaceService> logger) : IOcrCallbackInterfaceService
 {
-    private const string ActiveValue = "YES";
     private const string InterfaceUser = "api";
-    private const int ResultMaxLength = 50;
 
     public async Task<OcrCallbackInterfaceSummary> ProcessAsync(
         Guid callbackId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool forceReprocess = false)
     {
-        // The controller and service can share a DbContext. Detach only this saved
-        // callback graph so a concurrent processor's terminal status is read from
-        // SQL Server without discarding unrelated tracked work.
-        DetachTrackedCallbackGraph(callbackId);
+        // The controller and service can share a DbContext. Matching now runs
+        // entirely inside the stored procedure, but SaveChangesAsync (for the
+        // document rows below) would still flush any unrelated staged changes
+        // on this context, so refuse to run with any already pending.
         if (dbContext.ChangeTracker.HasChanges())
         {
             throw new InvalidOperationException(
@@ -37,85 +48,28 @@ public sealed class OcrCallbackInterfaceService(
             IsolationLevel.ReadCommitted,
             cancellationToken);
 
-        var callback = await dbContext.InterfaceLimsOcrCallbacks
-            .FromSqlInterpolated($"""
-                SELECT *
-                FROM dbo.t_interface_lims_ocr_callback WITH (UPDLOCK, HOLDLOCK)
-                WHERE callback_id = {callbackId}
-                """)
-            .Include(x => x.Results)
-            .ThenInclude(x => x.Items)
-            .SingleOrDefaultAsync(x => x.CallbackId == callbackId, cancellationToken)
-            ?? throw new InvalidOperationException($"OCR callback '{callbackId}' was not found.");
-
-        if (IsTerminal(callback.InterfaceStatus)
-            && !string.IsNullOrWhiteSpace(callback.InterfaceSummaryJson))
-        {
-            var replay = JsonSerializer.Deserialize<OcrCallbackInterfaceSummary>(
-                callback.InterfaceSummaryJson)
-                ?? throw new InvalidOperationException(
-                    $"OCR callback '{callbackId}' has an invalid saved interface summary.");
-            replay.IsReplay = true;
-            await transaction.CommitAsync(cancellationToken);
-            return replay;
-        }
-
         var createdDocumentPaths = new List<string>();
 
         try
         {
-            var summary = new OcrCallbackInterfaceSummary();
-            var hasEligibleResults = callback.Results.Any(IsReadyToCheck);
+            var (summaryJson, isReplay) = await ExecuteRemapProcedureAsync(
+                callbackId, forceReprocess, cancellationToken);
 
-            foreach (var result in callback.Results.OrderBy(x => x.PageId))
+            var summary = JsonSerializer.Deserialize<OcrCallbackInterfaceSummary>(summaryJson)
+                ?? throw new InvalidOperationException(
+                    $"OCR callback '{callbackId}' returned an invalid interface summary.");
+            summary.IsReplay = isReplay;
+
+            if (isReplay)
             {
-                if (!IsReadyToCheck(result))
-                {
-                    summary.Pages.Add(new OcrCallbackInterfacePageResult
-                    {
-                        PageId = result.PageId,
-                        Status = "ignored",
-                        Reason = "tracking_status_not_ready"
-                    });
-                    continue;
-                }
-
-                summary.Pages.Add(await ProcessResultAsync(result, cancellationToken));
+                await transaction.CommitAsync(cancellationToken);
+                return summary;
             }
 
-            summary.UpdatedItemCount = summary.Pages.Sum(x => x.UpdatedItemCount);
-            summary.SkippedItemCount = summary.Pages.Sum(x => x.SkippedItemCount);
-            summary.AlreadyProcessedItemCount = summary.Pages.Sum(x => x.AlreadyProcessedItemCount);
+            await StoreDocumentsAndEnrichSummaryAsync(
+                callbackId, summary, createdDocumentPaths, cancellationToken);
 
-            var completed = hasEligibleResults
-                && summary.Pages
-                    .Where(x => x.Status != "ignored")
-                    .All(x => x.Status == "completed");
-
-            summary.InterfaceStatus = completed
-                ? OcrInterfaceStatuses.Completed
-                : summary.UpdatedItemCount + summary.AlreadyProcessedItemCount == 0
-                    ? OcrInterfaceStatuses.NotMatched
-                    : OcrInterfaceStatuses.Partial;
-
-            var documentBindings = await StoreDocumentsAsync(
-                callback,
-                summary.Pages,
-                createdDocumentPaths,
-                cancellationToken);
-
-            callback.IsInterface = completed;
             await dbContext.SaveChangesAsync(cancellationToken);
-
-            foreach (var binding in documentBindings)
-            {
-                binding.Page.DocumentId = binding.Document.DocumentId;
-            }
-
-            callback.InterfaceStatus = summary.InterfaceStatus;
-            callback.InterfaceSummaryJson = JsonSerializer.Serialize(summary);
-            await dbContext.SaveChangesAsync(cancellationToken);
-
             await transaction.CommitAsync(cancellationToken);
 
             logger.LogInformation(
@@ -136,20 +90,67 @@ public sealed class OcrCallbackInterfaceService(
         }
     }
 
-    private async Task<List<DocumentBinding>> StoreDocumentsAsync(
-        InterfaceLimsOcrCallbackEntity callback,
-        IReadOnlyCollection<OcrCallbackInterfacePageResult> pages,
+    private async Task<(string SummaryJson, bool IsReplay)> ExecuteRemapProcedureAsync(
+        Guid callbackId,
+        bool forceReprocess,
+        CancellationToken cancellationToken)
+    {
+        var connection = (SqlConnection)dbContext.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "dbo.usp_ocr_callback_remap";
+        command.CommandType = CommandType.StoredProcedure;
+
+        var currentTransaction = dbContext.Database.CurrentTransaction;
+        if (currentTransaction is not null)
+        {
+            command.Transaction = (SqlTransaction)currentTransaction.GetDbTransaction();
+        }
+
+        command.Parameters.Add(new SqlParameter("@callback_id", SqlDbType.UniqueIdentifier) { Value = callbackId });
+        command.Parameters.Add(new SqlParameter("@force_reprocess", SqlDbType.Bit) { Value = forceReprocess });
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            throw new InvalidOperationException($"OCR callback '{callbackId}' was not found.");
+        }
+
+        var summaryJson = reader.GetString(0);
+        var isReplay = reader.GetBoolean(1);
+        return (summaryJson, isReplay);
+    }
+
+    private async Task StoreDocumentsAndEnrichSummaryAsync(
+        Guid callbackId,
+        OcrCallbackInterfaceSummary summary,
         ICollection<string> createdDocumentPaths,
         CancellationToken cancellationToken)
     {
-        var eligiblePages = pages
+        var eligiblePages = summary.Pages
             .Where(x => x.ReceiptDetailId.HasValue && x.Status != "ignored")
             .ToList();
 
         if (eligiblePages.Count == 0)
         {
-            return [];
+            return;
         }
+
+        var callback = await dbContext.InterfaceLimsOcrCallbacks
+            .AsNoTracking()
+            .Where(x => x.CallbackId == callbackId)
+            .Select(x => new { x.JobTaskId })
+            .SingleAsync(cancellationToken);
+
+        var resultFileIds = await dbContext.InterfaceLimsOcrResults
+            .AsNoTracking()
+            .Where(x => x.CallbackId == callbackId)
+            .Select(x => new { x.PageId, x.FileId, x.TrackingId })
+            .ToDictionaryAsync(x => x.PageId, cancellationToken);
 
         var config = await dbContext.InterfaceLimsOcrConfigApis
             .AsNoTracking()
@@ -163,7 +164,8 @@ public sealed class OcrCallbackInterfaceService(
                 page.DocumentStatus = "not_configured";
             }
 
-            return [];
+            await PersistEnrichedSummaryAsync(callbackId, summary, cancellationToken);
+            return;
         }
 
         var documentGroup = string.IsNullOrWhiteSpace(config.DocumentGroup)
@@ -197,7 +199,6 @@ public sealed class OcrCallbackInterfaceService(
             : config.DocumentWebPath.Trim();
         var originalDocumentName = GetOriginalFileName(sourcePath);
         var extension = Path.GetExtension(sourcePath).ToLowerInvariant();
-        var bindings = new List<DocumentBinding>();
         var documentsByReceipt = new Dictionary<Guid, LimsDocumentEntity>();
 
         foreach (var page in eligiblePages)
@@ -206,8 +207,8 @@ public sealed class OcrCallbackInterfaceService(
             if (documentsByReceipt.TryGetValue(receiptDetailId, out var currentDocument))
             {
                 page.DocumentStatus = "stored";
+                page.DocumentId = currentDocument.DocumentId;
                 page.DocumentPath = currentDocument.DocumentPath;
-                bindings.Add(new DocumentBinding(page, currentDocument));
                 continue;
             }
 
@@ -233,7 +234,7 @@ public sealed class OcrCallbackInterfaceService(
             File.Copy(sourcePath, destinationPath, overwrite: false);
             createdDocumentPaths.Add(destinationPath);
 
-            var result = callback.Results.Single(x => x.PageId == page.PageId);
+            resultFileIds.TryGetValue(page.PageId, out var resultIds);
             var document = new LimsDocumentEntity
             {
                 PkId = receiptDetailId,
@@ -244,8 +245,8 @@ public sealed class OcrCallbackInterfaceService(
                 DocumentPath = BuildWebPath(webRoot, documentGroup, storedFileName),
                 Description = "OCR callback document",
                 Udf1 = callback.JobTaskId,
-                Udf2 = callback.CallbackId.ToString(),
-                Udf3 = result.FileId ?? result.TrackingId,
+                Udf2 = callbackId.ToString(),
+                Udf3 = resultIds?.FileId ?? resultIds?.TrackingId,
                 IsActive = true,
                 CreateBy = InterfaceUser,
                 CreateDate = DateTime.Now
@@ -255,10 +256,36 @@ public sealed class OcrCallbackInterfaceService(
             documentsByReceipt[receiptDetailId] = document;
             page.DocumentStatus = "stored";
             page.DocumentPath = document.DocumentPath;
-            bindings.Add(new DocumentBinding(page, document));
         }
 
-        return bindings;
+        // LimsDocuments rows need their identity DocumentId assigned before the
+        // enriched summary (which embeds document_id) is persisted.
+        await dbContext.SaveChangesAsync(cancellationToken);
+        foreach (var page in eligiblePages)
+        {
+            if (page.ReceiptDetailId.HasValue
+                && documentsByReceipt.TryGetValue(page.ReceiptDetailId.Value, out var document))
+            {
+                page.DocumentId = document.DocumentId;
+            }
+        }
+
+        await PersistEnrichedSummaryAsync(callbackId, summary, cancellationToken);
+    }
+
+    private async Task PersistEnrichedSummaryAsync(
+        Guid callbackId,
+        OcrCallbackInterfaceSummary summary,
+        CancellationToken cancellationToken)
+    {
+        var enrichedJson = JsonSerializer.Serialize(summary);
+        await dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            UPDATE dbo.t_interface_lims_ocr_callback
+            SET interface_summary_json = {enrichedJson}
+            WHERE callback_id = {callbackId}
+            """,
+            cancellationToken);
     }
 
     private static void ValidateDocumentGroup(string documentGroup)
@@ -323,323 +350,5 @@ public sealed class OcrCallbackInterfaceService(
                 // Preserve the original database/interface exception.
             }
         }
-    }
-
-    private sealed record DocumentBinding(
-        OcrCallbackInterfacePageResult Page,
-        LimsDocumentEntity Document);
-
-    private async Task<OcrCallbackInterfacePageResult> ProcessResultAsync(
-        InterfaceLimsOcrResultEntity result,
-        CancellationToken cancellationToken)
-    {
-        var page = new OcrCallbackInterfacePageResult { PageId = result.PageId };
-        var matchDataError = GetMatchDataError(result);
-        if (matchDataError is not null)
-        {
-            return FailPage(page, result.Items, matchDataError);
-        }
-
-        var productName = result.ProductName!.Trim();
-        var supplierName = result.SupplierName!.Trim();
-        // Only the OCR internal lot is matched against the inbound lot number.
-        var internalLot = result.InternalLot!.Trim();
-        var mfgDate = result.MfgDate!.Value.Date;
-
-        // OCR product name is matched against the inbound RM name (item_rm_name).
-        var inboundCandidates = await dbContext.LimsInboundReceives
-            .AsNoTracking()
-            .Where(x => x.ItemRmName != null
-                && x.SupplierName != null
-                && x.LotNumber != null
-                && x.ItemRmName.Trim() == productName
-                && x.SupplierName.Trim() == supplierName
-                && x.LotNumber.Trim() == internalLot
-                && x.MfgDate == mfgDate)
-            .Take(2)
-            .ToListAsync(cancellationToken);
-
-        if (inboundCandidates.Count == 0)
-        {
-            return FailPage(page, result.Items, "inbound_not_found");
-        }
-
-        if (inboundCandidates.Count > 1)
-        {
-            return FailPage(page, result.Items, "inbound_ambiguous");
-        }
-
-        var inbound = inboundCandidates[0];
-        page.ReceiptDetailId = inbound.ReceiptDetailId;
-
-        var scanCount = await dbContext.LimsQaqcScans
-            .AsNoTracking()
-            .Where(x => x.ReceiptDetailId == inbound.ReceiptDetailId)
-            .Take(2)
-            .CountAsync(cancellationToken);
-
-        if (scanCount == 0)
-        {
-            return FailPage(page, result.Items, "qaqc_scan_not_found");
-        }
-
-        if (scanCount > 1)
-        {
-            return FailPage(page, result.Items, "qaqc_scan_ambiguous");
-        }
-
-        if (result.Items.Count == 0)
-        {
-            page.Status = "not_matched";
-            page.Reason = "parameter_items_missing";
-            result.IsInterface = false;
-            return page;
-        }
-
-        foreach (var item in result.Items.OrderBy(x => x.Seq))
-        {
-            var itemResult = await ProcessItemAsync(item, inbound, cancellationToken);
-            page.Items.Add(itemResult);
-
-            if (itemResult.Status == "updated")
-            {
-                page.UpdatedItemCount++;
-            }
-            else if (itemResult.Status == "already_processed")
-            {
-                page.AlreadyProcessedItemCount++;
-            }
-            else
-            {
-                page.SkippedItemCount++;
-            }
-        }
-
-        var processedItemCount = page.UpdatedItemCount + page.AlreadyProcessedItemCount;
-        var pageCompleted = processedItemCount > 0 && page.SkippedItemCount == 0;
-        page.Status = pageCompleted ? "completed" : processedItemCount == 0 ? "not_matched" : "partial";
-        result.IsInterface = pageCompleted;
-
-        return page;
-    }
-
-    private async Task<OcrCallbackInterfaceItemResult> ProcessItemAsync(
-        InterfaceLimsOcrResultItemEntity item,
-        LimsInboundReceiveEntity inbound,
-        CancellationToken cancellationToken)
-    {
-        var response = new OcrCallbackInterfaceItemResult
-        {
-            Seq = item.Seq,
-            ParameterName = item.ParameterName,
-            Status = "skipped"
-        };
-
-        if (item.IsInterface
-            || await dbContext.LimsQaqcCoaParameterTransactions
-                .AsNoTracking()
-                .AnyAsync(x => x.TranId == item.ItemId, cancellationToken))
-        {
-            item.IsInterface = true;
-            response.Status = "already_processed";
-            return response;
-        }
-
-        if (string.IsNullOrWhiteSpace(item.ResultValue))
-        {
-            response.Reason = "result_missing";
-            return response;
-        }
-
-        var normalizedResult = item.ResultValue.Trim();
-        if (normalizedResult.Length > ResultMaxLength)
-        {
-            response.Reason = "result_too_long";
-            return response;
-        }
-
-        var normalizedParameterName = item.ParameterName.Trim();
-        var mappings = await dbContext.LimsCoaParameterMappings
-            .AsNoTracking()
-            .Where(x => x.IsActive.Trim() == ActiveValue
-                && x.OcrParameterName != null
-                && x.CoaParameterName != null
-                && x.OcrParameterName.Trim() == normalizedParameterName)
-            .Take(2)
-            .ToListAsync(cancellationToken);
-
-        if (mappings.Count == 0)
-        {
-            response.Reason = "mapping_not_found";
-            return response;
-        }
-
-        if (mappings.Count > 1)
-        {
-            response.Reason = "mapping_ambiguous";
-            return response;
-        }
-
-        var coaParameterName = mappings[0].CoaParameterName!.Trim();
-        var coaParameters = await dbContext.LimsCoaParameters
-            .AsNoTracking()
-            .Where(x => x.IsActive.Trim() == ActiveValue
-                && x.CoaParameterName != null
-                && x.CoaParameterName.Trim() == coaParameterName)
-            .Take(2)
-            .ToListAsync(cancellationToken);
-
-        if (coaParameters.Count == 0)
-        {
-            response.Reason = "coa_parameter_not_found";
-            return response;
-        }
-
-        if (coaParameters.Count > 1)
-        {
-            response.Reason = "coa_parameter_ambiguous";
-            return response;
-        }
-
-        var coaParameterId = coaParameters[0].CoaParameterId;
-        var targets = await (
-                from manage in dbContext.LimsManageCoaParameters
-                join test in dbContext.LimsQaqcCoaParameterTests
-                    on manage.ManageCoaParameterId equals test.ManageCoaParameterId
-                where manage.CoaParameterId == coaParameterId
-                    && manage.IsActive.Trim() == ActiveValue
-                    && test.ReceiptDetailId == inbound.ReceiptDetailId
-                select new { manage.ManageCoaParameterId, Test = test })
-            .Take(2)
-            .ToListAsync(cancellationToken);
-
-        if (targets.Count == 0)
-        {
-            response.Reason = "parameter_test_not_found";
-            return response;
-        }
-
-        if (targets.Count > 1)
-        {
-            response.Reason = "parameter_test_ambiguous";
-            return response;
-        }
-
-        var target = targets[0];
-        var now = DateTime.Now;
-        target.Test.Result = normalizedResult;
-        target.Test.UpdateBy = InterfaceUser;
-        target.Test.UpdateDate = now;
-
-        dbContext.LimsQaqcCoaParameterTransactions.Add(new LimsQaqcCoaParameterTransactionEntity
-        {
-            // The callback item is the durable audit idempotency key. Reprocessing the
-            // same item cannot create another transaction, even after a process restart.
-            TranId = item.ItemId,
-            LogType = "OCR Callback",
-            ReceiptDetailId = inbound.ReceiptDetailId,
-            ManageCoaParameterId = target.ManageCoaParameterId,
-            Result = normalizedResult,
-            ResultBetween = target.Test.ResultBetween,
-            ReceiveDate = inbound.ReceiveDate,
-            UomId = inbound.UomId,
-            TransationBy = InterfaceUser,
-            TransactionDate = now
-        });
-
-        item.IsInterface = true;
-        response.Status = "updated";
-        return response;
-    }
-
-    private static bool IsReadyToCheck(InterfaceLimsOcrResultEntity result)
-    {
-        return string.Equals(
-            result.TrackingStatus?.Trim(),
-            "ReadyToCheck",
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsTerminal(string? interfaceStatus)
-    {
-        return interfaceStatus is OcrInterfaceStatuses.Completed
-            or OcrInterfaceStatuses.Partial
-            or OcrInterfaceStatuses.NotMatched;
-    }
-
-    private void DetachTrackedCallbackGraph(Guid callbackId)
-    {
-        var resultIds = dbContext.ChangeTracker
-            .Entries<InterfaceLimsOcrResultEntity>()
-            .Where(x => x.Entity.CallbackId == callbackId)
-            .Select(x => x.Entity.ResultId)
-            .ToHashSet();
-
-        foreach (var entry in dbContext.ChangeTracker
-                     .Entries<InterfaceLimsOcrResultItemEntity>()
-                     .Where(x => resultIds.Contains(x.Entity.ResultId))
-                     .ToList())
-        {
-            entry.State = EntityState.Detached;
-        }
-
-        foreach (var entry in dbContext.ChangeTracker
-                     .Entries<InterfaceLimsOcrResultEntity>()
-                     .Where(x => x.Entity.CallbackId == callbackId)
-                     .ToList())
-        {
-            entry.State = EntityState.Detached;
-        }
-
-        foreach (var entry in dbContext.ChangeTracker
-                     .Entries<InterfaceLimsOcrCallbackEntity>()
-                     .Where(x => x.Entity.CallbackId == callbackId)
-                     .ToList())
-        {
-            entry.State = EntityState.Detached;
-        }
-    }
-
-    private static string? GetMatchDataError(InterfaceLimsOcrResultEntity result)
-    {
-        if (string.IsNullOrWhiteSpace(result.ProductName))
-        {
-            return "product_name_missing";
-        }
-
-        if (string.IsNullOrWhiteSpace(result.SupplierName))
-        {
-            return "supplier_name_missing";
-        }
-
-        if (string.IsNullOrWhiteSpace(result.InternalLot))
-        {
-            return "internal_lot_missing";
-        }
-
-        return result.MfgDate is null ? "mfg_date_missing" : null;
-    }
-
-    private static OcrCallbackInterfacePageResult FailPage(
-        OcrCallbackInterfacePageResult page,
-        IEnumerable<InterfaceLimsOcrResultItemEntity> items,
-        string reason)
-    {
-        page.Status = "not_matched";
-        page.Reason = reason;
-
-        foreach (var item in items.OrderBy(x => x.Seq))
-        {
-            page.Items.Add(new OcrCallbackInterfaceItemResult
-            {
-                Seq = item.Seq,
-                ParameterName = item.ParameterName,
-                Status = "skipped",
-                Reason = reason
-            });
-            page.SkippedItemCount++;
-        }
-
-        return page;
     }
 }

@@ -125,6 +125,75 @@ public class CallbackController(
         });
     }
 
+    [HttpPost("ocr/remap")]
+    public async Task<IActionResult> RemapOcrResult(
+        [FromBody] OcrRemapRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request is null || request.ResultId == Guid.Empty)
+        {
+            return ValidationError("result_id", "Value is required");
+        }
+
+        var callbackId = await dbContext.InterfaceLimsOcrResults
+            .AsNoTracking()
+            .Where(x => x.ResultId == request.ResultId)
+            .Select(x => x.CallbackId)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (callbackId == Guid.Empty)
+        {
+            return NotFound(new
+            {
+                status = "error",
+                message = "OCR result was not found",
+                data = new { },
+                errors = new[] { new { field = "result_id", message = "OCR result was not found" } }
+            });
+        }
+
+        OcrCallbackInterfaceSummary interfaceSummary;
+        try
+        {
+            interfaceSummary = await interfaceService.ProcessAsync(
+                callbackId,
+                cancellationToken,
+                forceReprocess: true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to remap OCR callback {CallbackId} to QAQC.", callbackId);
+
+            return StatusCode(500, new
+            {
+                status = "error",
+                message = "Remapping failed",
+                data = new { callback_id = callbackId },
+                errors = new[] { new { field = "interface", message = "Unable to update QAQC results" } }
+            });
+        }
+
+        return Ok(new
+        {
+            status = "success",
+            message = "Remapping completed",
+            data = new
+            {
+                callback_id = callbackId,
+                interface_status = interfaceSummary.InterfaceStatus,
+                updated_item_count = interfaceSummary.UpdatedItemCount,
+                skipped_item_count = interfaceSummary.SkippedItemCount,
+                already_processed_item_count = interfaceSummary.AlreadyProcessedItemCount,
+                pages = interfaceSummary.Pages
+            },
+            errors = (object?)null
+        });
+    }
+
     [HttpPost("call_back")]
     public async Task<IActionResult> ReceiveOcrResult(
         [FromBody] OcrCallbackRequest request,

@@ -1,5 +1,6 @@
 using LIMS_AJT_NK_CallbackWorker;
 using LIMS_AJT_NK_CallbackWorker.Data;
+using LIMS_AJT_NK_CallbackWorker.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -12,6 +13,7 @@ builder.Services.AddDbContext<WorkerDbContext>(options =>
     ServiceLifetime.Singleton,
     ServiceLifetime.Singleton);
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IOcrRemapService, OcrRemapService>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

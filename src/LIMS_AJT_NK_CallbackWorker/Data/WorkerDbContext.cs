@@ -7,6 +7,7 @@ public class WorkerDbContext(DbContextOptions<WorkerDbContext> options) : DbCont
 {
     public DbSet<LimsOcrConfigApiEntity> LimsOcrConfigApis => Set<LimsOcrConfigApiEntity>();
     public DbSet<InterfaceLimsOcrLogEntity> InterfaceLimsOcrLogs => Set<InterfaceLimsOcrLogEntity>();
+    public DbSet<InterfaceLimsOcrCallbackEntity> InterfaceLimsOcrCallbacks => Set<InterfaceLimsOcrCallbackEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -75,6 +76,18 @@ public class WorkerDbContext(DbContextOptions<WorkerDbContext> options) : DbCont
             entity.HasIndex(x => x.CreateDate);
             entity.HasIndex(x => x.JobTaskId);
             entity.HasIndex(x => x.FlowId);
+        });
+
+        modelBuilder.Entity<InterfaceLimsOcrCallbackEntity>(entity =>
+        {
+            entity.ToTable("t_interface_lims_ocr_callback");
+            entity.HasKey(x => x.CallbackId);
+
+            entity.Property(x => x.CallbackId).HasColumnName("callback_id");
+            entity.Property(x => x.JobTaskId).HasColumnName("job_task_id").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.InterfaceStatus).HasColumnName("interface_status").HasMaxLength(25);
+            entity.Property(x => x.IsInterface).HasColumnName("is_interface").HasColumnType("bit");
+            entity.Property(x => x.CreateDate).HasColumnName("create_date").HasColumnType("datetime");
         });
     }
 }
