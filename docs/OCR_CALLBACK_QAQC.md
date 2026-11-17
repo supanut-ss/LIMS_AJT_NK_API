@@ -8,10 +8,10 @@ Endpoint `POST /api/call_back` จะบันทึก raw callback ก่อ�
 ระบบต้องพบ inbound เพียงหนึ่งรายการจากค่าทั้งสี่ต่อไปนี้ โดยตัดช่องว่างหัวท้าย
 และไม่สนตัวพิมพ์เล็ก/ใหญ่:
 
-- `product_name` ตรงกับ `t_wms_item.description`
+- `product_name` ตรงกับ `t_lims_inbound_receive.item_rm_name`
 - `Supplier_name` ตรงกับ `t_lims_inbound_receive.supplier_name`
-- `lot_number` ตรงกับ `t_lims_inbound_receive.lot_number`; ถ้า OCR ส่งเป็นค่าว่าง
-  ระบบจะใช้ `Internal_lot` แทน
+- `Internal_lot` ตรงกับ `t_lims_inbound_receive.lot_number` (ใช้ `Internal_lot` เท่านั้น
+  ไม่ใช้ `lot_number` จาก OCR)
 - `mfg_date` ตรงกับ `t_lims_inbound_receive.mfg_date`
 
 หลังจากนั้นต้องพบ `t_lims_qaqc_scan` หนึ่งรายการ และ parameter ต้องผ่าน active
