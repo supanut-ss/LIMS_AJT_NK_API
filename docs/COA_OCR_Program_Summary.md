@@ -40,6 +40,7 @@ Folders: `1_Inbound` → `2_Processing` → `3_Success` / `4_Error` / invalid-ty
 - On restart, jobs stuck in `sending` are recovered using the route/URL saved in the log.
 - The worker does **not** poll for results. A `submitted` job stays in `2_Processing` until Aji calls `/api/call_back`.
 - Log status (`t_interface_lims_ocr_log.work_status`): `sending`, `submitted`, `send_error`, `completed_success`, `completed_error`.
+- **File location columns:** `file_path` is the path when the job was created (`2_Processing`) and is **not updated** when the callback finalizes the job. The moved location (`3_Success` / `4_Error`) is stored in `final_path`.
 - Aji may return sub-jobs (`jobs[].job_task_id`, e.g. `<id>_1`); the worker stores them to match callbacks.
 
 ### 2.2 Callback and QAQC interface (API)
@@ -90,7 +91,8 @@ copies it to `{document_host_directory}/{document_group}` (default group `QC_COA
 and inserts `t_lims_documents` (`pk_id = receipt_detail_id`, `udf1..3 = job_task_id, callback_id, file_id/tracking_id`).
 
 - `document_host_directory` not set → parameters still update, `document_status = not_configured`.
-- Directory set but source file missing/copy fails → whole interface rolls back, HTTP 500.
+- The source PDF is looked up in the `input_ocr` log by `job_task_id`: `final_path` first, then `file_path`, whichever file exists. This matters for Remapping and repeated callbacks, because the worker has already moved the PDF out of `2_Processing` (fixed 2026-11-18; before that only `file_path` was read and the copy failed).
+- Directory set but source file missing/copy fails → whole interface rolls back, HTTP 500 (Review COA shows a "Remapping failed" warning).
 - Same receipt + group + job already stored → `already_exists` (no duplicate).
 
 ### 2.5 Review COA page (WMS_NEW)
@@ -141,6 +143,7 @@ Web app also reads `AJINOMOTO_API_*` keys in `Web.config`. Never commit real tok
 - Feedback from the page uses `tracking_id` as `job_task_id`, whereas the callback uses `job_task_id` (possibly a sub-job id such as `<id>_1`). **[Confirm]** this is the id Aji expects.
 - Date format: callback `DD/MM/YYYY`; feedback from the web page `yyyy-MM-dd`. **[Confirm]** Aji accepts both.
 - Review COA has no delete or new-row actions (view/edit/feedback only).
+- The document group decides which page lists the file: the Upload File tab filters by `pk_id` and `document_group` (`QCCoa` page uses `QC_COA`, `QACoa` / `QAQCCoa` page uses `QA_COA`). Set `document_group` in the config to match the page users open; a file stored under the other group will not be listed. **[Confirm]** `QAQCCoa` group (verified on DEV only: `QA_COA` showed the file).
 - Files left in `2_Processing` with status `submitted` mean the callback never arrived (no polling fallback).
 - Quantity text such as `94000 kg` is split into quantity and UOM by the API.
 

@@ -40,6 +40,7 @@ COA OCR ใช้อ่านเอกสาร Certificate of Analysis (COA) �
 - เมื่อ restart งานที่ค้างสถานะ `sending` จะถูกกู้คืนโดยใช้ route/URL ที่บันทึกไว้ใน log
 - Worker **ไม่ poll** ผลลัพธ์ งานสถานะ `submitted` จะค้างใน `2_Processing` จนกว่า Aji จะเรียก `/api/call_back`
 - สถานะ log (`t_interface_lims_ocr_log.work_status`): `sending`, `submitted`, `send_error`, `completed_success`, `completed_error`
+- **คอลัมน์ที่อยู่ไฟล์:** `file_path` คือ path ตอนสร้างงาน (`2_Processing`) และ **ไม่ถูกอัปเดต** เมื่อ callback ปิดงาน ที่อยู่หลังย้าย (`3_Success` / `4_Error`) เก็บใน `final_path`
 - Aji อาจคืน sub-job (`jobs[].job_task_id` เช่น `<id>_1`) Worker จะเก็บไว้เพื่อจับคู่กับ callback
 
 ### 2.2 Callback และ QAQC Interface (API)
@@ -90,7 +91,8 @@ Endpoint `POST /api/call_back` บันทึก raw callback ก่อน แ�
 และเพิ่มแถวใน `t_lims_documents` (`pk_id = receipt_detail_id`, `udf1..3 = job_task_id, callback_id, file_id/tracking_id`)
 
 - ไม่ได้ตั้ง `document_host_directory` → parameter ยังอัปเดตตามปกติ แต่ `document_status = not_configured`
-- ตั้งแล้วแต่ไม่พบไฟล์ต้นฉบับ/copy ไม่ได้ → rollback การ interface ทั้งหมด ตอบ HTTP 500
+- หา PDF ต้นฉบับจาก log ของ `input_ocr` ด้วย `job_task_id`: ดู `final_path` ก่อน แล้วค่อย `file_path` ใช้ไฟล์ที่มีอยู่จริง สำคัญกับ Remapping และ callback ซ้ำ เพราะ Worker ย้าย PDF ออกจาก `2_Processing` ไปแล้ว (แก้เมื่อ 2026-11-18 ก่อนหน้านั้นอ่านแค่ `file_path` จึง copy ไม่ได้)
+- ตั้งแล้วแต่ไม่พบไฟล์ต้นฉบับ/copy ไม่ได้ → rollback การ interface ทั้งหมด ตอบ HTTP 500 (หน้า Review COA แสดงคำเตือน "Remapping failed")
 - ใบรับ + group + job เดิมที่เก็บแล้ว → `already_exists` (ไม่สร้างซ้ำ)
 
 ### 2.5 หน้า Review COA (WMS_NEW)
@@ -141,6 +143,7 @@ Validation ของ callback (HTTP 400): ต้องมี `job_task_id`; ต�
 - Feedback จากหน้าเว็บส่ง `tracking_id` เป็น `job_task_id` ขณะที่ callback ใช้ `job_task_id` (อาจเป็น sub-job เช่น `<id>_1`) **[ต้องยืนยัน]** ว่าเป็น id ที่ Aji ต้องการ
 - รูปแบบวันที่: callback ใช้ `DD/MM/YYYY` ส่วน feedback จากเว็บใช้ `yyyy-MM-dd` **[ต้องยืนยัน]** ว่า Aji รับได้ทั้งสองแบบ
 - Review COA ไม่มีปุ่มลบหรือเพิ่มแถวใหม่ (ดู/แก้ไข/ส่ง feedback เท่านั้น)
+- กลุ่มเอกสาร (`document_group`) กำหนดว่าหน้าไหนจะเห็นไฟล์: แท็บ Upload File กรองตาม `pk_id` และ `document_group` (หน้า `QCCoa` ใช้ `QC_COA`, หน้า `QACoa` / `QAQCCoa` ใช้ `QA_COA`) ให้ตั้ง `document_group` ใน config ให้ตรงกับหน้าที่ผู้ใช้เปิด ไฟล์ที่เก็บคนละกลุ่มจะไม่ขึ้นรายการ **[ต้องยืนยัน]** กลุ่มของ `QAQCCoa` (ยืนยันแล้วบน DEV เท่านั้น: `QA_COA` แสดงไฟล์ได้)
 - ไฟล์ค้างใน `2_Processing` สถานะ `submitted` หมายถึง callback ไม่เคยมา (ไม่มี polling สำรอง)
 - Quantity เช่น `94000 kg` ถูกแยกเป็นจำนวนและหน่วยโดย API
 
