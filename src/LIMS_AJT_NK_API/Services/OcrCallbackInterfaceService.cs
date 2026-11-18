@@ -261,6 +261,7 @@ public sealed class OcrCallbackInterfaceService(
             };
 
             dbContext.LimsDocuments.Add(document);
+            await MarkScanCoaProcessingAsync(receiptDetailId, documentGroup, cancellationToken);
             documentsByReceipt[receiptDetailId] = document;
             page.DocumentStatus = "stored";
             page.DocumentPath = document.DocumentPath;
@@ -294,6 +295,41 @@ public sealed class OcrCallbackInterfaceService(
             WHERE callback_id = {callbackId}
             """,
             cancellationToken);
+    }
+
+    // Mirrors QAQCPostFileToServer.ashx in WMS_NEW: attaching a COA document moves
+    // the QAQC scan's COA status from NONE to PROCESSING for the document group.
+    private async Task MarkScanCoaProcessingAsync(
+        Guid receiptDetailId,
+        string documentGroup,
+        CancellationToken cancellationToken)
+    {
+        if (documentGroup is not ("QC_COA" or "QA_COA"))
+        {
+            return;
+        }
+
+        var scans = await dbContext.LimsQaqcScans
+            .Where(x => x.ReceiptDetailId == receiptDetailId)
+            .ToListAsync(cancellationToken);
+
+        foreach (var scan in scans)
+        {
+            if (documentGroup == "QC_COA" && IsUnsetCoaStatus(scan.QcCoaStatus))
+            {
+                scan.QcCoaStatus = "PROCESSING";
+            }
+            else if (documentGroup == "QA_COA" && IsUnsetCoaStatus(scan.QaCoaStatus))
+            {
+                scan.QaCoaStatus = "PROCESSING";
+            }
+        }
+    }
+
+    private static bool IsUnsetCoaStatus(string? status)
+    {
+        return string.IsNullOrWhiteSpace(status)
+            || status.Trim().Equals("NONE", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ValidateDocumentGroup(string documentGroup)

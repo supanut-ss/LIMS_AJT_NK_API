@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using LIMS_AJT_NK_API.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -70,8 +71,9 @@ internal sealed class TestDatabase : IAsyncDisposable
 
     private static async Task DeployRemapProcedureAsync(ApplicationDbContext context)
     {
-        var batches = RemapProcedureScript.Sql
-            .Split("\nGO\n", StringSplitOptions.None)
+        // The script may use CRLF line endings, so split on any line that is only "GO".
+        var batches = Regex
+            .Split(RemapProcedureScript.Sql, @"^\s*GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase)
             .Select(x => x.Trim())
             .Where(x => x.Length > 0 && !x.StartsWith("USE ", StringComparison.OrdinalIgnoreCase));
 

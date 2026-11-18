@@ -246,6 +246,7 @@ public sealed class OcrRemapService(WorkerDbContext dbContext, ILogger<OcrRemapS
                 cancellationToken);
 
             documentsByReceipt[receiptDetailId] = (documentId, documentPath);
+            await MarkScanCoaProcessingAsync(connection, transaction, receiptDetailId, documentGroup, cancellationToken);
             page["document_status"] = "stored";
             page["document_id"] = documentId;
             page["document_path"] = documentPath;
@@ -262,6 +263,33 @@ public sealed class OcrRemapService(WorkerDbContext dbContext, ILogger<OcrRemapS
         await updateCommand.ExecuteNonQueryAsync(cancellationToken);
 
         return enrichedJson;
+    }
+
+    // Mirrors QAQCPostFileToServer.ashx: attaching a COA document moves the QAQC
+    // scan's COA status from NONE to PROCESSING for the matching document group.
+    private static async Task MarkScanCoaProcessingAsync(
+        SqlConnection connection, SqlTransaction transaction, Guid receiptDetailId, string documentGroup,
+        CancellationToken cancellationToken)
+    {
+        var column = documentGroup switch
+        {
+            "QC_COA" => "qc_coa_status",
+            "QA_COA" => "qa_coa_status",
+            _ => null
+        };
+
+        if (column is null)
+        {
+            return;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            $"UPDATE dbo.t_lims_qaqc_scan SET {column} = 'PROCESSING' " +
+            $"WHERE receipt_detail_id = @receipt_detail_id AND ({column} IS NULL OR {column} = 'NONE')";
+        command.Parameters.Add(new SqlParameter("@receipt_detail_id", SqlDbType.UniqueIdentifier) { Value = receiptDetailId });
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task<Dictionary<int, (string? FileId, string? TrackingId)>> LoadResultFileIdsAsync(
