@@ -2,8 +2,10 @@ using System.Net;
 using System.Text.Json;
 using LIMS_AJT_NK_CallbackWorker.Data;
 using LIMS_AJT_NK_CallbackWorker.Models;
+using LIMS_AJT_NK_CallbackWorker.Options;
 using LIMS_AJT_NK_CallbackWorker.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace LIMS_AJT_NK_CallbackWorker;
 
@@ -11,8 +13,11 @@ public class Worker(
     ILogger<Worker> logger,
     IHttpClientFactory httpClientFactory,
     WorkerDbContext workerDbContext,
-    IOcrRemapService ocrRemapService) : BackgroundService
+    IOcrRemapService ocrRemapService,
+    IOptions<RemapOptions> remapOptions) : BackgroundService
 {
+    private DateTime lastRemapUtc = DateTime.MinValue;
+
     private static readonly string[] SupportedInboundExtensions = [".pdf", ".xlsx"];
 
 
@@ -46,6 +51,7 @@ public class Worker(
                     await ProcessInboundFolderAsync(client, config, stoppingToken);
                     await ProcessMasterDataInboundFolderAsync(client, config, stoppingToken);
                     ProcessInvalidTypeFiles(config, stoppingToken);
+                    await RetryNotMatchedIfDueAsync(stoppingToken);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -79,16 +85,36 @@ public class Worker(
         return TimeSpan.FromSeconds(intervalSeconds <= 0 ? 30 : intervalSeconds);
     }
 
-    // Prepared, not wired into ExecuteAsync yet: remaps every not_matched
-    // callback by calling dbo.usp_ocr_callback_remap directly (via
-    // IOcrRemapService), the same procedure LIMS_AJT_NK_API's call_back flow
-    // and WMS_NEW's Review COA "Remapping" button use. Call this from
-    // ExecuteAsync's loop once an automatic retry schedule is decided.
+    // Automatic remap: runs at most once per Remap:IntervalSeconds and only when
+    // Remap:Enabled is true (default). Failures are logged per callback and never
+    // stop the worker loop.
+    private async Task RetryNotMatchedIfDueAsync(CancellationToken stoppingToken)
+    {
+        var options = remapOptions.Value;
+        if (!options.Enabled)
+        {
+            return;
+        }
+
+        var interval = TimeSpan.FromSeconds(options.IntervalSeconds <= 0 ? 300 : options.IntervalSeconds);
+        if (DateTime.UtcNow - lastRemapUtc < interval)
+        {
+            return;
+        }
+
+        lastRemapUtc = DateTime.UtcNow;
+        await RetryNotMatchedCallbacksAsync(stoppingToken);
+    }
+
+    // Remaps every not_matched / partial callback by calling
+    // dbo.usp_ocr_callback_remap directly (via IOcrRemapService), the same
+    // procedure LIMS_AJT_NK_API's call_back flow and WMS_NEW's Review COA
+    // "Remapping" button use.
     private async Task RetryNotMatchedCallbacksAsync(CancellationToken stoppingToken)
     {
         var callbackIds = await workerDbContext.InterfaceLimsOcrCallbacks
             .AsNoTracking()
-            .Where(x => x.InterfaceStatus == "not_matched")
+            .Where(x => x.InterfaceStatus == "not_matched" || x.InterfaceStatus == "partial")
             .Select(x => x.CallbackId)
             .ToListAsync(stoppingToken);
 

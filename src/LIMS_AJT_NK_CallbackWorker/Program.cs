@@ -1,5 +1,6 @@
 using LIMS_AJT_NK_CallbackWorker;
 using LIMS_AJT_NK_CallbackWorker.Data;
+using LIMS_AJT_NK_CallbackWorker.Options;
 using LIMS_AJT_NK_CallbackWorker.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,6 +13,7 @@ builder.Services.AddDbContext<WorkerDbContext>(options =>
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")),
     ServiceLifetime.Singleton,
     ServiceLifetime.Singleton);
+builder.Services.Configure<RemapOptions>(builder.Configuration.GetSection(RemapOptions.SectionName));
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IOcrRemapService, OcrRemapService>();
 builder.Services.AddHostedService<Worker>();
