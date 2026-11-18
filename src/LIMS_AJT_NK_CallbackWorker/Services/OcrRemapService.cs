@@ -158,23 +158,42 @@ public sealed class OcrRemapService(WorkerDbContext dbContext, ILogger<OcrRemapS
         var documentGroup = string.IsNullOrWhiteSpace(documentGroupConfig) ? "QC_COA" : documentGroupConfig.Trim();
         ValidateDocumentGroup(documentGroup);
 
-        var sourcePath = await ExecuteScalarAsync<string>(
-            connection, transaction,
-            "SELECT TOP (1) file_path FROM dbo.t_interface_lims_ocr_log " +
-            "WHERE (api_name = 'input_ocr' OR api_name = 'input_ocr_file') AND job_task_id = @job_task_id AND file_path IS NOT NULL " +
-            "ORDER BY create_date DESC",
-            [new SqlParameter("@job_task_id", SqlDbType.NVarChar, 100) { Value = jobTaskId }],
-            cancellationToken);
+        // The worker moves the PDF from Processing to Success/Error after the
+        // callback, so file_path can be stale; final_path holds the moved location.
+        string? logFilePath = null;
+        string? logFinalPath = null;
+        await using (var pathCommand = connection.CreateCommand())
+        {
+            pathCommand.Transaction = transaction;
+            pathCommand.CommandText =
+                "SELECT TOP (1) file_path, final_path FROM dbo.t_interface_lims_ocr_log " +
+                "WHERE (api_name = 'input_ocr' OR api_name = 'input_ocr_file') AND job_task_id = @job_task_id AND file_path IS NOT NULL " +
+                "ORDER BY create_date DESC";
+            pathCommand.Parameters.Add(new SqlParameter("@job_task_id", SqlDbType.NVarChar, 100) { Value = jobTaskId });
 
-        if (string.IsNullOrWhiteSpace(sourcePath))
+            await using var pathReader = await pathCommand.ExecuteReaderAsync(cancellationToken);
+            if (await pathReader.ReadAsync(cancellationToken))
+            {
+                logFilePath = pathReader.IsDBNull(0) ? null : pathReader.GetString(0);
+                logFinalPath = pathReader.IsDBNull(1) ? null : pathReader.GetString(1);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(logFilePath) && string.IsNullOrWhiteSpace(logFinalPath))
         {
             throw new InvalidOperationException($"Input OCR file log was not found for job_task_id '{jobTaskId}'.");
         }
 
-        sourcePath = Path.GetFullPath(sourcePath);
-        if (!File.Exists(sourcePath))
+        var sourcePath = new[] { logFinalPath, logFilePath }
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => Path.GetFullPath(p!))
+            .FirstOrDefault(File.Exists);
+
+        if (sourcePath is null)
         {
-            throw new FileNotFoundException("Input OCR source file was not found.", sourcePath);
+            throw new FileNotFoundException(
+                "Input OCR source file was not found.",
+                Path.GetFullPath(string.IsNullOrWhiteSpace(logFinalPath) ? logFilePath! : logFinalPath));
         }
 
         var hostRoot = Path.GetFullPath(documentHostDirectory.Trim());

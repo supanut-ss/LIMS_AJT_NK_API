@@ -183,10 +183,18 @@ public sealed class OcrCallbackInterfaceService(
             ?? throw new InvalidOperationException(
                 $"Input OCR file log was not found for job_task_id '{callback.JobTaskId}'.");
 
-        var sourcePath = Path.GetFullPath(sourceLog.FilePath!);
-        if (!File.Exists(sourcePath))
+        // The worker moves the PDF to Success/Error after the callback, so FilePath
+        // can be stale; FinalPath holds the moved location.
+        var sourcePath = new[] { sourceLog.FinalPath, sourceLog.FilePath }
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => Path.GetFullPath(p!))
+            .FirstOrDefault(File.Exists);
+
+        if (sourcePath is null)
         {
-            throw new FileNotFoundException("Input OCR source file was not found.", sourcePath);
+            throw new FileNotFoundException(
+                "Input OCR source file was not found.",
+                Path.GetFullPath(sourceLog.FinalPath ?? sourceLog.FilePath!));
         }
 
         var hostRoot = Path.GetFullPath(config.DocumentHostDirectory.Trim());
