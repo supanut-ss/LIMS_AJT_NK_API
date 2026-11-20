@@ -146,43 +146,12 @@ public class Worker(
         LimsOcrConfigApiEntity config,
         CancellationToken stoppingToken)
     {
-        if (!Directory.Exists(config.InboundDirectory))
-        {
-            return;
-        }
-
-        var inboundFiles = Directory
-            .EnumerateFiles(config.InboundDirectory, "*.*", SearchOption.TopDirectoryOnly)
-            .Where(file => string.Equals(Path.GetExtension(file), ".pdf", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(File.GetCreationTimeUtc)
-            .ToList();
-
-        foreach (var inboundFile in inboundFiles)
-        {
-            stoppingToken.ThrowIfCancellationRequested();
-
-            if (!SharedFilePolicy.IsReady(inboundFile, config.FileStableSeconds, DateTime.UtcNow))
-            {
-                continue;
-            }
-
-            try
-            {
-                await ProcessInboundFileAsync(client, config, inboundFile, stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (IOException ex)
-            {
-                logger.LogInformation(ex, "File was already claimed or became unavailable. File={File}", inboundFile);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to process inbound file. File={File}", inboundFile);
-            }
-        }
+        // Copies each file/folder to Archive first, then processes file by file.
+        await new InboundFolderScanner(logger).ScanAsync(
+            config.InboundDirectory,
+            config.FileStableSeconds,
+            inboundFile => ProcessInboundFileAsync(client, config, inboundFile, stoppingToken),
+            stoppingToken);
     }
 
     private async Task ProcessInboundFileAsync(
@@ -1027,6 +996,7 @@ public class Worker(
         Directory.CreateDirectory(config.SuccessDirectory);
         Directory.CreateDirectory(config.ErrorDirectory);
         Directory.CreateDirectory(config.InvalidTypeDirectory);
+        Directory.CreateDirectory(InboundArchivePolicy.ResolveArchiveDirectory(config.InboundDirectory));
     }
 
     private static string MoveToFolder(
